@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+from dataclasses import dataclass
 import json
 import logging
 import uuid
@@ -22,16 +24,17 @@ from llm.embeddings import embed_query, embed_texts
 from observability.arize import get_tracing_status, init_tracing, set_span_attribute, set_span_error, span
 from prompts.letters import build_letter_fallback, build_letter_prompt, normalize_letter_type
 from prompts.system import build_chat_prompt
-from schemas.api import AnyDocumentExtraction, ChatHistoryResponse, ChatRequest, ChatSessionResponse, ChatSessionsResponse, DeadlineAgentRequest, GenerateLetterRequest, ParseDocumentResponse
+from schemas.api import AnyDocumentExtraction, ChatHistoryResponse, ChatRequest, ChatSessionResponse, ChatSessionsResponse, DeadlineAgentRequest, GenerateLetterRequest, ParseDocumentFailure, ParseDocumentResponse, ParseDocumentsResponse
 from schemas.auth import AuthResponse, LoginRequest, MeResponse, PublicUser, RegisterRequest, User
 from schemas.documents import BankStatementExtraction, DeedExtraction, WillExtraction
-from schemas.estate import Asset, EstateState, Executor, UploadedDocument, utc_now_iso
+from schemas.estate import Alert, Asset, EstateState, Executor, UploadedDocument, utc_now_iso
 from store.redis_client import (
     add_document,
     append_chat_session_messages,
     create_chat_session,
     create_session,
     create_user,
+    delete_document,
     delete_session,
     get_chat_history,
     get_chat_session_history,
@@ -182,6 +185,15 @@ async def document_file(estate_id: str, doc_id: str) -> Response:
     )
 
 
+@app.delete("/document/{estate_id}/{doc_id}")
+async def delete_document_route(estate_id: str, doc_id: str) -> dict[str, object]:
+    removed = delete_document(estate_id, doc_id)
+    if removed is None:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    alerts = await run_deadline_agent(estate_id)
+    return {"estateId": estate_id, "deletedDocumentId": doc_id, "alerts": alerts}
+
+
 @app.post("/deadline-agent")
 async def deadline_agent(request: DeadlineAgentRequest) -> dict[str, object]:
     with span("route.deadline_agent", estate_id=request.estateId, action_type="deadline_agent_run"):
@@ -191,12 +203,21 @@ async def deadline_agent(request: DeadlineAgentRequest) -> dict[str, object]:
 
 ACCEPTED_CONTENT_TYPES = {
     "application/pdf",
-    "image/png",
     "image/jpeg",
-    "image/jpg",
-    "image/webp",
+    "image/png",
+    "image/heic",
+    "image/heif",
     "text/plain",
-    "text/html",
+}
+
+FILENAME_CONTENT_TYPES = {
+    ".pdf": "application/pdf",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".heic": "image/heic",
+    ".heif": "image/heif",
+    ".txt": "text/plain",
 }
 
 
@@ -277,13 +298,80 @@ def _merge_extraction(estate_id: str, extraction: AnyDocumentExtraction) -> None
         merge_estate_state(estate_id, partial)
 
 
-@app.post("/parse-document", response_model=ParseDocumentResponse)
-async def parse_document(
-    estateId: str = Form(default="demo-milligan"),
-    documentType: str = Form(default=""),
-    file: UploadFile = File(...),
-) -> ParseDocumentResponse:
-    content_type = (file.content_type or "application/octet-stream").split(";")[0].strip()
+def _normalize_content_type(content_type: str, filename: str) -> str:
+    lowered = filename.lower()
+    for suffix, mapped_type in FILENAME_CONTENT_TYPES.items():
+        if lowered.endswith(suffix):
+            return mapped_type
+    return content_type
+
+
+def _plural(noun: str, count: int) -> str:
+    return noun if count == 1 else f"{noun}s"
+
+
+def _review_message(extraction: AnyDocumentExtraction) -> str:
+    findings: list[str] = []
+    if isinstance(extraction, WillExtraction):
+        if extraction.executorName:
+            findings.append(f"executor name {extraction.executorName}")
+        if extraction.beneficiaries:
+            findings.append(f"{len(extraction.beneficiaries)} {_plural('beneficiary', len(extraction.beneficiaries))}")
+        if extraction.assets:
+            findings.append(f"{len(extraction.assets)} {_plural('asset', len(extraction.assets))}")
+    elif isinstance(extraction, BankStatementExtraction):
+        if extraction.institution:
+            findings.append(f"institution {extraction.institution}")
+        if extraction.accountLast4:
+            findings.append(f"account ending in {extraction.accountLast4}")
+        if extraction.balance is not None:
+            findings.append(f"reported balance ${extraction.balance:,.2f}")
+        if extraction.statementDate:
+            findings.append(f"statement date {extraction.statementDate}")
+    elif isinstance(extraction, DeedExtraction):
+        if extraction.propertyAddress:
+            findings.append(f"property address {extraction.propertyAddress}")
+        if extraction.apn:
+            findings.append(f"APN {extraction.apn}")
+        if extraction.grantor:
+            findings.append(f"grantor {extraction.grantor}")
+        if extraction.grantee:
+            findings.append(f"grantee {extraction.grantee}")
+
+    if not findings:
+        return "We read the document. Please review it before relying on the estate update."
+    if len(findings) == 1:
+        summary = findings[0]
+    elif len(findings) == 2:
+        summary = f"{findings[0]} and {findings[1]}"
+    else:
+        summary = f"{', '.join(findings[:-1])}, and {findings[-1]}"
+    return f"We found {summary}. Please review this before relying on the estate update."
+
+
+@dataclass
+class ParsedUpload:
+    filename: str
+    content_type: str
+    content: bytes
+    extraction: AnyDocumentExtraction
+    resolved_type: str
+    needs_type_selection: bool
+
+
+def _parse_error_response(exc: HTTPException, filename: str) -> ParseDocumentFailure:
+    detail = exc.detail if isinstance(exc.detail, str) else "Could not parse this document."
+    status_code = int(exc.status_code or 422)
+    return ParseDocumentFailure(fileName=filename, detail=detail, statusCode=status_code)
+
+
+async def _read_and_parse_upload(
+    estate_id: str,
+    file: UploadFile,
+    document_type: str = "",
+) -> ParsedUpload:
+    filename = file.filename or "upload"
+    content_type = _normalize_content_type((file.content_type or "application/octet-stream").split(";")[0].strip(), filename)
     if content_type not in ACCEPTED_CONTENT_TYPES:
         raise HTTPException(status_code=415, detail=f"Unsupported file type: {content_type}")
 
@@ -291,27 +379,27 @@ async def parse_document(
     if not content:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
 
-    filename = file.filename or "upload"
-    text = extract_text(content, content_type)
+    text = await asyncio.to_thread(extract_text, content, content_type)
 
     if not text.strip():
         raise HTTPException(status_code=422, detail="Could not extract any text from the uploaded file.")
 
-    # The user can manually specify the type when auto-detection failed on a prior attempt.
-    forced_type = documentType.strip() or None
+    forced_type = document_type.strip() or None
 
     try:
         with span(
             "route.parse_document.extract",
-            estate_id=estateId,
+            estate_id=estate_id,
             action_type="document_parse",
             upload_filename=filename,
             content_type=content_type,
             forced_type=forced_type or "",
         ) as current_span:
-            extraction, resolved_type = await parse_document_text(
-                text, filename=filename, forced_type=forced_type
-            )
+            parsed = await _call_parse_document_text(text, filename=filename, forced_type=forced_type)
+            if isinstance(parsed, tuple):
+                extraction, resolved_type = parsed
+            else:
+                extraction, resolved_type = parsed, parsed.documentType
             set_span_attribute(current_span, "doc_type", resolved_type)
             set_span_attribute(current_span, "chunk_count", len(extraction.rawChunks))
     except DocumentParseError as exc:
@@ -323,40 +411,114 @@ async def parse_document(
             ),
         ) from exc
 
-    # Auto-detection (content + fuzzy filename) failed and the user hasn't told us
-    # the type yet: don't store anything, ask the UI to prompt for a manual choice.
-    if resolved_type == "unknown" and forced_type is None:
-        return ParseDocumentResponse(
-            estateId=estateId,
-            extraction=extraction,
-            documentType="unknown",
-            needsTypeSelection=True,
-            alerts=[],
-        )
-
-    # Structured facts are written back into estate state (no-op for unknown types).
-    _merge_extraction(estateId, extraction)
-
-    doc_id = f"doc-{uuid.uuid4().hex[:8]}-{filename}"
-    set_document_file(estateId, doc_id, content_type, content)
-    add_document(
-        estateId,
-        UploadedDocument(id=doc_id, fileName=filename, documentType=resolved_type),
+    return ParsedUpload(
+        filename=filename,
+        content_type=content_type,
+        content=content,
+        extraction=extraction,
+        resolved_type=resolved_type,
+        needs_type_selection=resolved_type == "unknown" and forced_type is None,
     )
 
-    chunks = extraction.rawChunks
+
+async def _call_parse_document_text(text: str, filename: str, forced_type: str | None) -> Any:
+    try:
+        return await parse_document_text(text, filename=filename, forced_type=forced_type)
+    except TypeError as exc:
+        if "unexpected keyword argument" not in str(exc):
+            raise
+        return await parse_document_text(text, forced_type=forced_type)
+
+
+def _store_parsed_upload(estate_id: str, parsed: ParsedUpload) -> None:
+    if parsed.needs_type_selection:
+        return
+
+    _merge_extraction(estate_id, parsed.extraction)
+
+    doc_id = f"doc-{uuid.uuid4().hex[:8]}-{parsed.filename}"
+    set_document_file(estate_id, doc_id, parsed.content_type, parsed.content)
+    add_document(
+        estate_id,
+        UploadedDocument(id=doc_id, fileName=parsed.filename, documentType=parsed.resolved_type),
+    )
+
+    chunks = parsed.extraction.rawChunks
     if chunks:
         embeddings = embed_texts(chunks)
-        upsert_vectors(estateId, chunks, embeddings, source=filename, document_type=resolved_type)
+        upsert_vectors(estate_id, chunks, embeddings, source=parsed.filename, document_type=parsed.resolved_type)
 
-    alerts = await run_deadline_agent(estateId)
+
+def _parse_response_from_upload(
+    estate_id: str,
+    parsed: ParsedUpload,
+    alerts: list[Alert] | None = None,
+) -> ParseDocumentResponse:
+    needs_type_selection = parsed.needs_type_selection
     return ParseDocumentResponse(
-        estateId=estateId,
-        extraction=extraction,
-        documentType=resolved_type,
-        needsTypeSelection=False,
-        alerts=alerts,
+        estateId=estate_id,
+        fileName=parsed.filename,
+        extraction=parsed.extraction,
+        documentType="unknown" if needs_type_selection else parsed.resolved_type,
+        needsTypeSelection=needs_type_selection,
+        reviewMessage=None if needs_type_selection else _review_message(parsed.extraction),
+        alerts=alerts or [],
     )
+
+
+@app.post("/parse-document", response_model=ParseDocumentResponse)
+async def parse_document(
+    estateId: str = Form(default="demo-milligan"),
+    documentType: str = Form(default=""),
+    file: UploadFile = File(...),
+) -> ParseDocumentResponse:
+    parsed = await _read_and_parse_upload(estateId, file, documentType)
+    if parsed.needs_type_selection:
+        return _parse_response_from_upload(estateId, parsed)
+
+    _store_parsed_upload(estateId, parsed)
+    alerts = await run_deadline_agent(estateId)
+    return _parse_response_from_upload(estateId, parsed, alerts=alerts)
+
+
+@app.post("/parse-documents", response_model=ParseDocumentsResponse)
+async def parse_documents(
+    estateId: str = Form(default="demo-milligan"),
+    files: list[UploadFile] = File(...),
+) -> ParseDocumentsResponse:
+    if not files:
+        raise HTTPException(status_code=400, detail="No files were uploaded.")
+
+    parsed_results = await asyncio.gather(
+        *(_read_and_parse_upload(estateId, file) for file in files),
+        return_exceptions=True,
+    )
+
+    responses: list[ParseDocumentResponse] = []
+    failures: list[ParseDocumentFailure] = []
+    stored_any = False
+
+    for file, result in zip(files, parsed_results, strict=False):
+        filename = file.filename or "upload"
+        if isinstance(result, HTTPException):
+            failures.append(_parse_error_response(result, filename))
+            continue
+        if isinstance(result, Exception):
+            LOGGER.exception("Batch document parse failed for %s", filename, exc_info=result)
+            failures.append(ParseDocumentFailure(fileName=filename, detail="Could not parse this document.", statusCode=422))
+            continue
+
+        responses.append(_parse_response_from_upload(estateId, result))
+        if not result.needs_type_selection:
+            _store_parsed_upload(estateId, result)
+            stored_any = True
+
+    alerts = await run_deadline_agent(estateId) if stored_any else []
+    for response in responses:
+        if not response.needsTypeSelection:
+            response.alerts = alerts
+
+    return ParseDocumentsResponse(estateId=estateId, results=responses, failed=failures, alerts=alerts)
 
 
 @app.post("/chat")

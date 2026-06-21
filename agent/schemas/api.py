@@ -19,6 +19,7 @@ class SearchResult(ContractModel):
 
 class ParseDocumentResponse(ContractModel):
     estateId: str
+    fileName: str | None = None
     extraction: AnyDocumentExtraction
     # The resolved document type the file was stored under (the user's choice when
     # they manually selected one, otherwise the auto-detected type).
@@ -26,6 +27,20 @@ class ParseDocumentResponse(ContractModel):
     # True when auto-detection failed and no type was supplied, so the UI should
     # prompt the user to pick the document type. Nothing is stored in this case.
     needsTypeSelection: bool = False
+    reviewMessage: str | None = None
+    alerts: list[Alert] = Field(default_factory=list)
+
+
+class ParseDocumentFailure(ContractModel):
+    fileName: str
+    detail: str
+    statusCode: int = 422
+
+
+class ParseDocumentsResponse(ContractModel):
+    estateId: str
+    results: list[ParseDocumentResponse] = Field(default_factory=list)
+    failed: list[ParseDocumentFailure] = Field(default_factory=list)
     alerts: list[Alert] = Field(default_factory=list)
 
 

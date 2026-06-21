@@ -30,9 +30,24 @@ export const generateLetterRequestSchema = z.object({
 
 export const parseDocumentResponseSchema = z.object({
   estateId: z.string(),
+  fileName: z.string().nullable().optional(),
   extraction: documentExtractionSchema,
   documentType: z.string(),
   needsTypeSelection: z.boolean(),
+  reviewMessage: z.string().nullable().optional(),
+  alerts: z.array(alertSchema),
+}).strict();
+
+export const parseDocumentFailureSchema = z.object({
+  fileName: z.string(),
+  detail: z.string(),
+  statusCode: z.number().int(),
+}).strict();
+
+export const parseDocumentsResponseSchema = z.object({
+  estateId: z.string(),
+  results: z.array(parseDocumentResponseSchema),
+  failed: z.array(parseDocumentFailureSchema),
   alerts: z.array(alertSchema),
 }).strict();
 

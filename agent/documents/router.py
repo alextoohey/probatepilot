@@ -42,6 +42,7 @@ TYPE_ALIASES: dict[str, list[str]] = {
 
 # Minimum average token similarity for a fuzzy filename match to count.
 _FILENAME_MATCH_THRESHOLD = 0.82
+_FUZZY_STOPWORDS = {"a", "an", "and", "for", "of", "the", "to"}
 
 
 async def parse_document_text(
@@ -84,7 +85,8 @@ def resolve_document_type(text: str, filename: str = "") -> str:
     """Best-effort document type from content and the filename.
 
     Content detection wins for the structured types we can parse; otherwise we fall
-    back to fuzzy filename matching, then alias keywords in the body text.
+    back to fuzzy filename matching. Non-parseable checklist labels must match the
+    file name or be selected by the user, so unrelated notices are not silently filed.
     """
     primary = _detect_type(text)
     if primary in PARSEABLE_TYPES:
@@ -94,7 +96,7 @@ def resolve_document_type(text: str, filename: str = "") -> str:
     if by_name:
         return by_name
 
-    return _detect_by_aliases(text.lower()) or "unknown"
+    return "unknown"
 
 
 def detect_document_type(text: str) -> str:
@@ -126,21 +128,13 @@ def detect_type_from_filename(filename: str) -> str | None:
 
 def _token_similarity(alias: str, words: list[str]) -> float:
     """Average best-match similarity of each alias word against the filename words."""
-    alias_words = alias.split()
+    alias_words = [word for word in alias.split() if word not in _FUZZY_STOPWORDS]
     if not alias_words or not words:
         return 0.0
     total = 0.0
     for alias_word in alias_words:
         total += max(difflib.SequenceMatcher(None, alias_word, word).ratio() for word in words)
     return total / len(alias_words)
-
-
-def _detect_by_aliases(haystack: str) -> str | None:
-    """Match alias phrases anywhere in the lowercased body text."""
-    for dtype, aliases in TYPE_ALIASES.items():
-        if any(alias in haystack for alias in aliases):
-            return dtype
-    return None
 
 
 def _detect_type(text: str) -> str:
@@ -174,9 +168,14 @@ def _detect_type(text: str) -> str:
 
 def _keyword_detect(text: str) -> str:
     lowered = text.lower()
-    if "last will" in lowered or "testament" in lowered or "beneficiary" in lowered:
+    if "last will" in lowered or "testament" in lowered:
         return "will"
-    if "statement" in lowered and ("balance" in lowered or "account" in lowered):
+    if (
+        "bank statement" in lowered
+        or "brokerage statement" in lowered
+        or "account statement" in lowered
+        or ("statement period" in lowered and "balance" in lowered)
+    ):
         return "bank_statement"
     if "grant deed" in lowered or "legal description" in lowered or "apn" in lowered:
         return "deed"

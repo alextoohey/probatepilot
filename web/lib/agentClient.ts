@@ -9,6 +9,7 @@ import {
   generateLetterRequestSchema,
   generateLetterResponseSchema,
   parseDocumentResponseSchema,
+  parseDocumentsResponseSchema,
   seedResponseSchema,
 } from "./schemas/api";
 import { meResponseSchema, publicUserSchema } from "./schemas/auth";
@@ -23,6 +24,7 @@ import type {
   LoginRequest,
   MeResponse,
   ParseDocumentResponse,
+  ParseDocumentsResponse,
   PublicUser,
   RegisterRequest,
 } from "@/types";
@@ -128,6 +130,37 @@ export async function parseDocument(
   }
   const payload = await response.json();
   return parseDocumentResponseSchema.parse(payload);
+}
+
+export async function parseDocuments(
+  files: File[],
+  estateId = DEFAULT_ESTATE_ID,
+): Promise<ParseDocumentsResponse> {
+  const body = new FormData();
+  body.append("estateId", estateId);
+  for (const file of files) body.append("files", file);
+  const response = await fetch("/api/agent/parse-documents", { method: "POST", body });
+  if (!response.ok) {
+    let message = "We couldn't parse those documents. Please reupload clearer files.";
+    try {
+      const payload = await response.json();
+      if (typeof payload?.detail === "string") message = payload.detail;
+    } catch {
+      // Keep the friendly default when the proxy returns a non-JSON error body.
+    }
+    throw new Error(message);
+  }
+  const payload = await response.json();
+  return parseDocumentsResponseSchema.parse(payload);
+}
+
+export async function deleteDocument(estateId: string, documentId: string): Promise<void> {
+  const response = await fetch(`/api/agent/document/${encodeURIComponent(estateId)}/${encodeURIComponent(documentId)}`, {
+    method: "DELETE",
+  });
+  if (!response.ok) {
+    throw new Error(await readError(response, "Could not delete that document."));
+  }
 }
 
 export async function getChatHistory(estateId = DEFAULT_ESTATE_ID, sessionId?: string | null, signal?: AbortSignal): Promise<ChatMessage[]> {
