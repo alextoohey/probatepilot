@@ -17,20 +17,12 @@ from agents.deadline_agent import mark_alert_complete, run_deadline_agent
 from auth.security import hash_password, new_session_token, verify_password
 from documents.pdf_reader import extract_text
 from documents.router import parse_document_text
-from llm.claude import DocumentParseError, generate_letter_draft, stream_chat, suggest_followups
+from llm.claude import DocumentParseError, generate_letter_draft, stream_chat
 from llm.embeddings import embed_query, embed_texts
 from observability.arize import get_tracing_status, init_tracing, set_span_attribute, set_span_error, span
 from prompts.letters import build_letter_fallback, build_letter_prompt, normalize_letter_type
 from prompts.system import build_chat_prompt
-<<<<<<< HEAD
-<<<<<<< HEAD
-from schemas.api import AnyDocumentExtraction, ChatHistoryResponse, ChatRequest, ChatSessionResponse, ChatSessionsResponse, ChatSuggestionsRequest, ChatSuggestionsResponse, DeadlineAgentRequest, GenerateLetterRequest, ParseDocumentResponse
-=======
 from schemas.api import AnyDocumentExtraction, ChatHistoryResponse, ChatRequest, ChatSessionResponse, ChatSessionsResponse, CompleteAlertRequest, DeadlineAgentRequest, EstateResponse, GenerateLetterRequest, ParseDocumentResponse
->>>>>>> sameer-new
-=======
-from schemas.api import AnyDocumentExtraction, ChatHistoryResponse, ChatRequest, CompleteAlertRequest, ChatSessionResponse, ChatSessionsResponse, ChatSuggestionsRequest, ChatSuggestionsResponse, DeadlineAgentRequest, EstateResponse, GenerateLetterRequest, ParseDocumentResponse
->>>>>>> ce0949fe027c67f793b4543ef187c74706a1c96f
 from schemas.auth import AuthResponse, LoginRequest, MeResponse, PublicUser, RegisterRequest, User
 from schemas.documents import BankStatementExtraction, DeedExtraction, WillExtraction
 from schemas.estate import Asset, EstateState, Executor, UploadedDocument, utc_now_iso
@@ -456,39 +448,6 @@ async def new_chat_session(estate_id: str) -> ChatSessionResponse:
     with span("route.chat_session_create", estate_id=estate_id, action_type="chat_session_create"):
         session = create_chat_session(estate_id)
         return ChatSessionResponse(estateId=estate_id, session=session, messages=[])
-
-
-def _suggestion_fallback(estate: EstateState) -> list[str]:
-    """Deterministic next-question suggestions when Claude is unavailable."""
-    out: list[str] = []
-    if estate.alerts:
-        out.append("What's the most urgent deadline?")
-    if estate.debts:
-        out.append("How much does the estate owe?")
-        unnotified = next((d for d in estate.debts if not d.notified), None)
-        if unnotified:
-            out.append(f"Do I need to notify {unnotified.creditor}?")
-    if estate.assets:
-        out.append("What is the estate worth right now?")
-    out.append("What should I do next?")
-    # De-dupe while preserving order.
-    return list(dict.fromkeys(out))
-
-
-@app.post("/chat-suggestions")
-async def chat_suggestions(request: ChatSuggestionsRequest) -> ChatSuggestionsResponse:
-    with span("route.chat_suggestions", estate_id=request.estateId, action_type="chat_suggestions"):
-        estate_state = get_estate_state(request.estateId)
-        history = [
-            {"role": m.get("role", ""), "content": m.get("content", "")}
-            for m in get_chat_history(request.estateId)
-        ]
-        suggestions = await suggest_followups(
-            estate_state.model_dump_json(),
-            history,
-            _suggestion_fallback(estate_state),
-        )
-        return ChatSuggestionsResponse(estateId=request.estateId, suggestions=suggestions[:3])
 
 
 @app.post("/generate-letter")
