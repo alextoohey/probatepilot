@@ -36,7 +36,7 @@ Cross-rule consequences matter:
 - Distributions before creditor notice or claim-period close can create executor liability.
 
 Avoid duplicate alerts for the same operational issue.
-Final response:  must be a single JSON object: {"alerts": [...]}, top 5 alerts, existing Alert schema exactly.
+After evaluating the rules, submit the top 5 alerts with the submit_deadline_alerts tool.
 """.strip()
 
 
@@ -135,12 +135,8 @@ async def run_deadline_agent(estate_id: str = "demo-milligan") -> list[Alert]:
                 LOGGER.warning("DeadlineAgent using deterministic fallback: %s", fallback_reason, exc_info=True)
             final_alerts = deterministic_alerts
 
-        final_alerts = [_ensure_alert_guidance(alert) for alert in rank_alerts(dedupe_alerts(final_alerts))]
-        final_alerts = _preserve_existing_alert_state(estate, final_alerts)
-        final_tasks = _sync_tasks(estate, final_alerts)
-        estate.alerts = final_alerts
-        estate.tasks = final_tasks
-        set_estate_state(estate)
+        final_alerts = _persist_deadline_state(estate, final_alerts)
+        final_tasks = estate.tasks
         set_span_attribute(current_span, "rules_checked", len(CALIFORNIA_PROBATE_RULES))
         set_span_attribute(current_span, "alerts_fired", len(final_alerts))
         set_span_attribute(current_span, "tasks_synced", len(final_tasks))
@@ -158,6 +154,21 @@ async def run_deadline_agent(estate_id: str = "demo-milligan") -> list[Alert]:
                 ),
             )
         return final_alerts
+
+
+def refresh_deadline_state(estate_id: str = "demo-milligan") -> list[Alert]:
+    """Refresh deterministic alerts and tasks without waiting for Claude."""
+    estate = get_estate_state(estate_id)
+    return _persist_deadline_state(estate, evaluate_rules(estate))
+
+
+def _persist_deadline_state(estate: EstateState, alerts: list[Alert]) -> list[Alert]:
+    final_alerts = [_ensure_alert_guidance(alert) for alert in rank_alerts(dedupe_alerts(alerts))]
+    final_alerts = _preserve_existing_alert_state(estate, final_alerts)
+    estate.alerts = final_alerts
+    estate.tasks = _sync_tasks(estate, final_alerts)
+    set_estate_state(estate)
+    return final_alerts
 
 
 class MissingAnthropicKeyError(RuntimeError):
@@ -199,13 +210,33 @@ async def _run_claude_tool_loop(estate: EstateState, deterministic_alerts: list[
         response = await create_reasoning_message(
             system=DEADLINE_AGENT_SYSTEM_PROMPT,
             messages=messages,
-            tools=DEADLINE_AGENT_TOOLS,
+            tools=[*DEADLINE_AGENT_TOOLS, DEADLINE_ALERT_SUBMISSION_TOOL],
+            tool_choice=(
+                {"type": "tool", "name": DEADLINE_ALERT_SUBMISSION_TOOL_NAME}
+                if tool_call_count > 0
+                else None
+            ),
             max_tokens=DEADLINE_AGENT_MAX_TOKENS,
         )
         blocks = [_content_block_to_dict(block) for block in getattr(response, "content", [])]
         messages.append({"role": "assistant", "content": blocks})
 
         tool_uses = [block for block in blocks if block.get("type") == "tool_use"]
+        submission = next(
+            (block for block in tool_uses if block.get("name") == DEADLINE_ALERT_SUBMISSION_TOOL_NAME),
+            None,
+        )
+        if submission is not None:
+            tool_call_count += 1
+            payload = submission.get("input") or {}
+            raw_alerts = payload.get("alerts") if isinstance(payload, dict) else None
+            if not isinstance(raw_alerts, list):
+                raise ValueError("Claude submitted an invalid DeadlineAgent alert payload.")
+            return ClaudeAgentResult(
+                alerts=[Alert.model_validate(raw_alert) for raw_alert in raw_alerts],
+                tool_calls=tool_call_count,
+                json_repair_used=False,
+            )
         if not tool_uses:
             if tool_call_count == 0:
                 raise ClaudeToolUseRequiredError("Claude returned final alerts before using any tools.")
@@ -251,8 +282,7 @@ async def _run_claude_tool_loop(estate: EstateState, deterministic_alerts: list[
             messages.append({
                 "role": "user",
                 "content": (
-                    "Return the top 5 alerts as JSON only. "
-                    "Use the existing Alert schema exactly. "
+                    "Submit the top 5 alerts with the submit_deadline_alerts tool. "
                     "Keep ids, severity, type, rule, daysRemaining, and timingStatus aligned with the tool output. "
                     "You may improve title, body, actionRequired, whatYouNeed, and steps."
                 ),
@@ -594,7 +624,11 @@ def _sync_tasks(estate: EstateState, alerts: list[Alert]) -> list[Task]:
         tasks.append(task)
 
     for task in estate.tasks:
-        if task.id in matched_ids or task.relatedAlertId:
+        if task.id in matched_ids:
+            continue
+        # Keep completed generated tasks as the durable record that a stable
+        # alert was resolved, even after its rule stops firing.
+        if task.relatedAlertId and task.status != "done":
             continue
         tasks.append(task)
 
@@ -617,9 +651,12 @@ def _task_phase_for_alert(alert: Alert, fallback_phase: int) -> int:
     phase_by_prefix = {
         "alert-de-140": 1,
         "alert-death-certificates": 1,
+        "alert-letters-testamentary": 1,
         "alert-estate-ein": 2,
+        "alert-estate-bank-account": 2,
         "alert-de-160": 3,
         "alert-creditor-notice": 4,
+        "alert-debt-resolution": 4,
         "alert-newspaper-notice": 4,
         "alert-claim-period": 5,
         "alert-final-1040": 6,
@@ -657,6 +694,12 @@ def _task_matches_alert(task: Task, alert: Alert) -> bool:
     if "probate petition" in task_title and ("probate petition" in alert_title or "de-140" in alert_title):
         return True
     if "ein" in task_title and "ein" in alert_title:
+        return True
+    if "letters testamentary" in task_title and "letters testamentary" in alert_title:
+        return True
+    if "estate bank account" in task_title and "estate bank account" in alert_title:
+        return True
+    if "debt" in task_title and "debt" in alert_title:
         return True
     if "1040" in task_title and "1040" in alert_title:
         return True

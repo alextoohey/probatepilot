@@ -6,8 +6,9 @@ import json
 from types import SimpleNamespace
 
 from agents import deadline_agent
-from agents.deadline_agent import _extract_json, _parse_alerts_from_text, handle_deadline_agent_tool, mark_alert_complete, run_deadline_agent
+from agents.deadline_agent import _extract_json, _parse_alerts_from_text, handle_deadline_agent_tool, mark_alert_complete, refresh_deadline_state, run_deadline_agent
 from seed.demo_estate import build_demo_estate
+from schemas.estate import Task
 from store.redis_client import get_alerts, get_estate_state, seed_demo_estate
 
 
@@ -61,23 +62,22 @@ def test_alert_ranking_puts_critical_alerts_first(monkeypatch) -> None:
 
     alerts = asyncio.run(run_deadline_agent("demo-milligan"))
 
-    assert alerts[0].id == "alert-de-140-petition"
+    assert alerts[0].id == "alert-creditor-notice"
     assert alerts[0].severity == "critical"
-    assert alerts[0].timingStatus == "blocking"
-    assert alerts[1].id == "alert-creditor-notice"
+    assert alerts[0].timingStatus == "dated"
+    assert alerts[1].id == "alert-de-160-inventory"
     assert alerts[1].severity == "critical"
     assert isinstance(alerts[1].daysRemaining, int)
-    assert alerts[2].id == "alert-de-160-inventory"
-    assert alerts[2].severity == "critical"
 
 
 def test_deterministic_alerts_assign_timing_status() -> None:
     from datetime import date
     from rules.california_probate import evaluate_rules
 
-    alerts = {alert.id: alert for alert in evaluate_rules(build_demo_estate(), today=date(2026, 6, 21))}
+    estate = build_demo_estate()
+    next(task for task in estate.tasks if task.id == "task-obtain-ein").status = "todo"
+    alerts = {alert.id: alert for alert in evaluate_rules(estate, today=date(2026, 6, 21))}
 
-    assert alerts["alert-de-140-petition"].timingStatus == "blocking"
     assert alerts["alert-creditor-notice"].timingStatus == "dated"
     assert alerts["alert-de-160-inventory"].timingStatus == "dated"
     assert alerts["alert-estate-ein"].timingStatus == "prerequisite"
@@ -259,6 +259,46 @@ def test_claude_path_with_tool_call_and_valid_final_json_is_accepted(monkeypatch
     assert captured[0].attributes["claude_tool_calls"] == 1
 
 
+def test_claude_can_submit_schema_without_text_json_repair(monkeypatch) -> None:
+    captured = capture_deadline_agent_spans(monkeypatch)
+    requests: list[dict[str, object]] = []
+    responses = [
+        SimpleNamespace(
+            content=[{
+                "type": "tool_use",
+                "id": "toolu_evaluate",
+                "name": "evaluate_all_probate_rules",
+                "input": {},
+            }]
+        ),
+        SimpleNamespace(
+            content=[{
+                "type": "tool_use",
+                "id": "toolu_submit",
+                "name": "submit_deadline_alerts",
+                "input": deterministic_alert_payload(),
+            }]
+        ),
+    ]
+
+    async def tool_then_submission(**kwargs):
+        requests.append(kwargs)
+        return responses.pop(0)
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(deadline_agent, "create_reasoning_message", tool_then_submission)
+    seed_demo_estate()
+
+    alerts = asyncio.run(run_deadline_agent("demo-milligan"))
+
+    assert "alert-creditor-notice" in {alert.id for alert in alerts}
+    assert captured[0].attributes["fallback_used"] is False
+    assert captured[0].attributes["json_repair_used"] is False
+    assert captured[0].attributes["claude_tool_calls"] == 2
+    assert requests[0]["tool_choice"] is None
+    assert requests[1]["tool_choice"] == {"type": "tool", "name": "submit_deadline_alerts"}
+
+
 def test_run_deadline_agent_writes_alerts_to_store(monkeypatch) -> None:
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     seed_demo_estate()
@@ -283,20 +323,92 @@ def test_mark_alert_complete_dismisses_alert_and_completes_task(monkeypatch) -> 
     assert task.status == "done"
 
 
-def test_completed_alert_and_task_survive_deadline_agent_refresh(monkeypatch) -> None:
+def test_completed_task_survives_refresh_and_alert_does_not_reappear(monkeypatch) -> None:
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
     seed_demo_estate()
     asyncio.run(run_deadline_agent("demo-milligan"))
     mark_alert_complete("demo-milligan", "alert-creditor-notice")
 
-    alerts = asyncio.run(run_deadline_agent("demo-milligan"))
+    alerts = refresh_deadline_state("demo-milligan")
     estate = get_estate_state("demo-milligan")
 
-    alert = next(item for item in alerts if item.id == "alert-creditor-notice")
     task = next(item for item in estate.tasks if item.relatedAlertId == "alert-creditor-notice")
 
-    assert alert.dismissed is True
+    assert "alert-creditor-notice" not in {item.id for item in alerts}
     assert task.status == "done"
+    assert "alert-debt-resolution" in {item.id for item in alerts}
+
+
+def test_complete_alert_route_does_not_wait_for_claude(monkeypatch) -> None:
+    import main
+    from schemas.api import CompleteAlertRequest
+
+    seed_demo_estate()
+    refresh_deadline_state("demo-milligan")
+
+    async def unexpected_claude_run(*args, **kwargs):
+        raise AssertionError("complete-alert must not wait for Claude")
+
+    monkeypatch.setattr(main, "run_deadline_agent", unexpected_claude_run)
+    response = asyncio.run(main.complete_alert(CompleteAlertRequest(
+        estateId="demo-milligan",
+        alertId="alert-creditor-notice",
+    )))
+
+    alert_ids = {alert.id for alert in response.estate.alerts}
+    assert "alert-creditor-notice" not in alert_ids
+    assert "alert-debt-resolution" in alert_ids
+
+
+def test_deterministic_tasks_unlock_from_stable_completed_ids() -> None:
+    from datetime import date
+    from rules.california_probate import evaluate_rules
+
+    estate = build_demo_estate()
+    estate.documents = [document for document in estate.documents if document.documentType != "letters_testamentary"]
+    estate.tasks = []
+
+    initial_ids = {alert.id for alert in evaluate_rules(estate, today=date(2026, 6, 21))}
+    assert "alert-de-140-petition" in initial_ids
+    assert "alert-letters-testamentary" not in initial_ids
+    assert "alert-estate-ein" not in initial_ids
+
+    estate.tasks.append(Task(
+        id="task-de-140-petition",
+        title="File the probate petition",
+        status="done",
+        phase=1,
+        relatedAlertId="alert-de-140-petition",
+    ))
+    petition_complete_ids = {alert.id for alert in evaluate_rules(estate, today=date(2026, 6, 21))}
+    assert "alert-de-140-petition" not in petition_complete_ids
+    assert "alert-letters-testamentary" in petition_complete_ids
+    assert "alert-estate-ein" not in petition_complete_ids
+
+    estate.tasks.append(Task(
+        id="task-letters-testamentary",
+        title="Upload Letters Testamentary",
+        status="done",
+        phase=1,
+        relatedAlertId="alert-letters-testamentary",
+    ))
+    authority_ids = {alert.id for alert in evaluate_rules(estate, today=date(2026, 6, 21))}
+    assert "alert-letters-testamentary" not in authority_ids
+    assert "alert-estate-ein" in authority_ids
+    assert "alert-de-160-inventory" in authority_ids
+    assert "alert-creditor-notice" in authority_ids
+    assert "alert-estate-bank-account" not in authority_ids
+
+    estate.tasks.append(Task(
+        id="task-estate-ein",
+        title="Obtain estate EIN",
+        status="done",
+        phase=2,
+        relatedAlertId="alert-estate-ein",
+    ))
+    ein_ids = {alert.id for alert in evaluate_rules(estate, today=date(2026, 6, 21))}
+    assert "alert-estate-ein" not in ein_ids
+    assert "alert-estate-bank-account" in ein_ids
 
 
 def test_evaluate_all_rules_tool_returns_json_serializable_alert_data() -> None:

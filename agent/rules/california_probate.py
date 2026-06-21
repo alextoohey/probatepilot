@@ -22,11 +22,14 @@ class ProbateRule:
 CALIFORNIA_PROBATE_RULES = [
     ProbateRule("de-140", "DE-140 Probate Petition", "CA Probate Code", "dateOfDeath", "ASAP", "No legal authority until filed"),
     ProbateRule("death-certificates", "Death certificates", "Operational requirement", "dateOfDeath", "Immediately", "Institutions require certified copies"),
+    ProbateRule("letters-testamentary", "Letters Testamentary", "Court appointment prerequisite", "filedPetition", "After court appointment", "Estate administration requires proof of legal authority"),
     ProbateRule("de-160", "DE-160 Inventory & Appraisal", "CA Probate Code", "appointmentDate", "4 months", "Court sanctions and personal liability"),
     ProbateRule("creditor-notice", "Creditor notification", "CA Probate Code §9051", "appointmentDate", "30 days", "Personal liability for late distributions"),
     ProbateRule("newspaper-notice", "Newspaper notice to creditors", "CA Probate Code §9052", "firstPublicationDate", "3 weeks", "Notice violation"),
     ProbateRule("claim-period", "Creditor claim period closes", "CA Probate Code", "firstPublicationDate", "4 months", "Cannot distribute before close"),
     ProbateRule("estate-ein", "Estate EIN", "IRS SS-4", "estateBanking", "ASAP", "Cannot open estate bank account"),
+    ProbateRule("estate-bank-account", "Estate bank account", "Operational prerequisite", "legalAuthorityAndEin", "ASAP", "Estate funds should be kept separate from personal funds"),
+    ProbateRule("debt-resolution", "Debt resolution", "CA Probate administration", "creditorNotice", "Before distribution", "Unresolved debts can block final distribution"),
     ProbateRule("final-1040", "Final 1040", "IRS", "dateOfDeath", "April 15 following year", "IRS penalties"),
     ProbateRule("form-1041", "Form 1041", "IRS", "estateIncome", "April 15 following year", "IRS penalties"),
     ProbateRule("debt-order", "Debt payment order", "CA Probate Code", "beforeDistribution", "Sequential", "Out-of-order payments create personal liability"),
@@ -47,11 +50,14 @@ def evaluate_rules(estate: EstateState, today: date | None = None) -> list[Alert
     for rule_check in (
         _evaluate_de_140_probate_petition,
         _evaluate_death_certificates,
+        _evaluate_letters_testamentary,
+        _evaluate_estate_ein,
+        _evaluate_estate_bank_account,
         _evaluate_de_160_inventory,
         _evaluate_creditor_notification,
+        _evaluate_debt_resolution,
         _evaluate_newspaper_notice,
         _evaluate_claim_period,
-        _evaluate_estate_ein,
         _evaluate_final_1040,
         _evaluate_form_1041,
         _evaluate_debt_payment_order,
@@ -67,7 +73,7 @@ def _evaluate_de_140_probate_petition(estate: EstateState, today: date) -> list[
     death_date = _required_date(estate, "dateOfDeath", rule, today)
     if isinstance(death_date, Alert):
         return [death_date]
-    if _has_document(estate, "de-140", "probate petition"):
+    if _petition_filed(estate):
         return []
 
     days_since_death = (today - death_date).days
@@ -119,8 +125,34 @@ def _evaluate_death_certificates(estate: EstateState, today: date) -> list[Alert
     ]
 
 
+def _evaluate_letters_testamentary(estate: EstateState, today: date) -> list[Alert]:
+    rule = RULES_BY_ID["letters-testamentary"]
+    if not _petition_filed(estate) or _has_legal_authority(estate):
+        return []
+
+    return [
+        _alert(
+            rule=rule,
+            today=today,
+            alert_id="alert-letters-testamentary",
+            severity="critical",
+            alert_type="missing_doc",
+            timing_status="blocking",
+            title="Court appointment and Letters Testamentary are pending",
+            body=(
+                "The probate petition is recorded, but no Letters Testamentary or equivalent proof of "
+                "court appointment is recorded. Downstream estate administration remains blocked."
+            ),
+            action="Track the court appointment and upload the issued Letters Testamentary.",
+            days_remaining=None,
+        )
+    ]
+
+
 def _evaluate_de_160_inventory(estate: EstateState, today: date) -> list[Alert]:
     rule = RULES_BY_ID["de-160"]
+    if not _has_legal_authority(estate) or not _assets(estate) or _rule_completed(estate, "alert-de-160-inventory", "alert-de-160-ready"):
+        return []
     appointment = _required_date(estate, "appointmentDate", rule, today)
     if isinstance(appointment, Alert):
         return [appointment]
@@ -172,6 +204,8 @@ def _evaluate_de_160_inventory(estate: EstateState, today: date) -> list[Alert]:
 
 def _evaluate_creditor_notification(estate: EstateState, today: date) -> list[Alert]:
     rule = RULES_BY_ID["creditor-notice"]
+    if not _has_legal_authority(estate) or _creditor_notice_recorded(estate):
+        return []
     appointment = _required_date(estate, "appointmentDate", rule, today)
     if isinstance(appointment, Alert):
         return [appointment]
@@ -265,9 +299,7 @@ def _evaluate_claim_period(estate: EstateState, today: date) -> list[Alert]:
 
 def _evaluate_estate_ein(estate: EstateState, today: date) -> list[Alert]:
     rule = RULES_BY_ID["estate-ein"]
-    # TODO: Add hasEstateEin and estateBankAccountOpened to EstateState. Documents/tasks are a temporary proxy.
-    has_banking_asset = any(asset.type == "bank_account" for asset in _assets(estate))
-    if not has_banking_asset or _has_document(estate, "ein", "ss-4"):
+    if not _has_legal_authority(estate) or _estate_ein_recorded(estate):
         return []
 
     return [
@@ -280,11 +312,62 @@ def _evaluate_estate_ein(estate: EstateState, today: date) -> list[Alert]:
             timing_status="prerequisite",
             title="Estate EIN is not recorded",
             body=(
-                "Rule estate-ein (Estate EIN) is triggered by estate banking activity. "
-                "The estate has a bank account asset, but no EIN/SS-4 document or completed task is recorded. "
+                "Legal authority is recorded, but no estate EIN, SS-4 confirmation, or completed EIN task is recorded. "
                 f"Consequence: {rule.consequence}."
             ),
             action="Apply for or record the estate EIN before opening or using estate banking.",
+            days_remaining=None,
+        )
+    ]
+
+
+def _evaluate_estate_bank_account(estate: EstateState, today: date) -> list[Alert]:
+    rule = RULES_BY_ID["estate-bank-account"]
+    if not _has_legal_authority(estate) or not _estate_ein_recorded(estate) or _estate_bank_account_recorded(estate):
+        return []
+
+    return [
+        _alert(
+            rule=rule,
+            today=today,
+            alert_id="alert-estate-bank-account",
+            severity="warning",
+            alert_type="rule_violation",
+            timing_status="prerequisite",
+            title="Estate bank account is not recorded",
+            body=(
+                "Legal authority and the estate EIN are recorded, but no dedicated estate bank account "
+                "or completed account-opening task is recorded."
+            ),
+            action="Open a dedicated estate bank account and record the account in the estate file.",
+            days_remaining=None,
+        )
+    ]
+
+
+def _evaluate_debt_resolution(estate: EstateState, today: date) -> list[Alert]:
+    rule = RULES_BY_ID["debt-resolution"]
+    debts = _debts(estate)
+    if (
+        not _has_legal_authority(estate)
+        or not debts
+        or not _creditor_notice_recorded(estate)
+        or _rule_completed(estate, "alert-debt-resolution")
+    ):
+        return []
+
+    creditor_list = _join_descriptions(debt.creditor for debt in debts)
+    return [
+        _alert(
+            rule=rule,
+            today=today,
+            alert_id="alert-debt-resolution",
+            severity="warning",
+            alert_type="liability",
+            timing_status="prerequisite",
+            title="Known estate debts still need resolution",
+            body=f"Creditor notice is recorded for the known debts from {creditor_list}, but debt resolution is not recorded.",
+            action="Review and resolve valid estate debts in the required payment order before distribution.",
             days_remaining=None,
         )
     ]
@@ -437,6 +520,64 @@ def _alert(
         timingStatus=timing_status,
         actionRequired=action,
         createdAt=f"{today.isoformat()}T00:00:00+00:00",
+    )
+
+
+def _petition_filed(estate: EstateState) -> bool:
+    return (
+        _has_document(estate, "de-140", "probate petition")
+        or _task_done(estate, "file probate petition", "de-140")
+        or _rule_completed(estate, "alert-de-140-petition")
+    )
+
+
+def _has_legal_authority(estate: EstateState) -> bool:
+    return (
+        _has_document(estate, "letters testamentary", "letters of administration")
+        or _task_done(estate, "letters testamentary", "court appointment")
+        or _rule_completed(estate, "alert-letters-testamentary")
+    )
+
+
+def _estate_ein_recorded(estate: EstateState) -> bool:
+    return (
+        _has_document(estate, "estate ein", "ein confirmation", "ss-4")
+        or _task_done(estate, "estate ein", "obtain ein")
+        or _rule_completed(estate, "alert-estate-ein")
+    )
+
+
+def _estate_bank_account_recorded(estate: EstateState) -> bool:
+    has_estate_account_asset = any(
+        asset.type == "bank_account" and "estate" in _normalize(asset.description)
+        for asset in _assets(estate)
+    )
+    return (
+        has_estate_account_asset
+        or _has_document(estate, "estate bank account", "estate account")
+        or _task_done(estate, "estate bank account", "dedicated estate account")
+        or _rule_completed(estate, "alert-estate-bank-account")
+    )
+
+
+def _creditor_notice_recorded(estate: EstateState) -> bool:
+    debts = _debts(estate)
+    return (
+        bool(debts) and all(debt.notified for debt in debts)
+        or _has_document(estate, "creditor notice")
+        or _task_done(estate, "notify all known creditors", "creditor notice")
+        or _rule_completed(estate, "alert-creditor-notice")
+    )
+
+
+def _rule_completed(estate: EstateState, *alert_ids: str) -> bool:
+    ids = set(alert_ids)
+    if any(alert.id in ids and alert.dismissed for alert in estate.alerts):
+        return True
+    generated_task_ids = {f"task-{alert_id.removeprefix('alert-')}" for alert_id in ids}
+    return any(
+        task.status == "done" and (task.relatedAlertId in ids or task.id in generated_task_ids)
+        for task in estate.tasks
     )
 
 

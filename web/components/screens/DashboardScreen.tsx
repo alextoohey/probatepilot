@@ -2,7 +2,7 @@
 // Dashboard, estate overview, the DeadlineAgent's ranked alerts, and tasks.
 import React from "react";
 import { ExecutorIcons } from "@/lib/design/icons";
-import { Card, StatBlock, Alert, Badge, ProgressSteps, Button, Avatar } from "@/components/ds";
+import { Card, StatBlock, Alert, Badge, Button, Avatar } from "@/components/ds";
 import { DEMO_ESTATE, fmtMoney, type EstateProfile, type Beneficiary, type Alert as DesignAlert } from "@/lib/design/data";
 import { formatAlertTimingLabel } from "@/lib/alertTiming";
 import { cleanDashboardText } from "@/lib/displayText";
@@ -23,9 +23,10 @@ type Props = {
   liveAlerts?: BackendAlert[] | null;
   liveEstate?: EstateState | null;
   liveAlertsFailed?: boolean;
+  deadlineRefreshing?: boolean;
 };
 
-export function DashboardScreen({ estate, completedIds = [], onOpenStep, onGoDocuments, liveAlerts = null, liveEstate, liveAlertsFailed = false }: Props) {
+export function DashboardScreen({ estate, completedIds = [], onOpenStep, onGoDocuments, liveAlerts = null, liveEstate, liveAlertsFailed = false, deadlineRefreshing = false }: Props) {
   const E = DEMO_ESTATE;
   const I = ExecutorIcons;
   const [benList, setBenList] = React.useState<Beneficiary[]>(E.beneficiaries.map((b) => ({ ...b })));
@@ -48,7 +49,7 @@ export function DashboardScreen({ estate, completedIds = [], onOpenStep, onGoDoc
       );
     }
     if (currentReal.documents.length > 0) {
-      return <RealDashboard real={currentReal} alerts={liveAlerts ?? currentReal.alerts} onOpenStep={onOpenStep} />;
+      return <RealDashboard real={currentReal} alerts={liveAlerts ?? currentReal.alerts} onOpenStep={onOpenStep} deadlineRefreshing={deadlineRefreshing} />;
     }
     return (
       <div style={{ maxWidth: 760, margin: "0 auto", padding: "48px 40px", display: "grid", gap: "var(--space-8)" }}>
@@ -61,9 +62,6 @@ export function DashboardScreen({ estate, completedIds = [], onOpenStep, onGoDoc
             You're the {cleanDashboardText(estate.role.toLowerCase())} for this {cleanDashboardText(estate.state)} estate in {cleanDashboardText(estate.county)} County. Add a few documents and Executor AI will build the estate and start tracking deadlines for you.
           </p>
         </header>
-        <Card padded>
-          <ProgressSteps current={0} steps={E.phases} />
-        </Card>
         <Card tint padded>
           <div style={{ display: "flex", alignItems: "flex-start", gap: 14 }}>
             <span style={{ flex: "none", width: 44, height: 44, borderRadius: "999px", background: "var(--evergreen-100)", color: "var(--evergreen-700)", display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
@@ -102,7 +100,6 @@ export function DashboardScreen({ estate, completedIds = [], onOpenStep, onGoDoc
         ? []
         : guidanceAlerts;
   const open = allAlerts.filter((a) => !done.has(a.id) && !(a as BackendAlert).dismissed);
-  const completed = allAlerts.filter((a) => done.has(a.id) || !!(a as BackendAlert).dismissed);
   const assetTotal = liveEstate
     ? liveEstate.assets.reduce((sum, asset) => sum + (asset.estimatedValue ?? 0), 0)
     : E.assets.reduce((sum, asset) => sum + asset.value, 0);
@@ -112,14 +109,14 @@ export function DashboardScreen({ estate, completedIds = [], onOpenStep, onGoDoc
   const taskTone = { done: "success", todo: "neutral", in_progress: "brand", blocked: "warning" } as const;
   const taskLabel = { done: "Done", todo: "To do", in_progress: "In progress", blocked: "Blocked" } as const;
   const displayTasks = liveEstate?.tasks?.length ? liveEstate.tasks : E.tasks;
+  const completedTaskCount = displayTasks.filter((task) => task.status === "done").length;
+  const totalTaskCount = displayTasks.length;
 
   const deceasedName = liveEstate ? liveEstate.deceasedName : E.deceasedName;
   const appointmentDate = liveEstate ? liveEstate.appointmentDate : E.appointmentDate;
   const beneficiaryCount = liveEstate ? liveEstate.beneficiaries.length : E.beneficiaries.length;
   const assetCount = liveEstate ? liveEstate.assets.length : E.assets.length;
   const appraisedCount = liveEstate ? liveEstate.assets.filter((asset) => asset.appraised).length : E.assets.filter((asset) => asset.appraised).length;
-  const currentPhase = liveEstate ? liveEstate.phase : E.phase;
-  const currentIndex = Math.min(Math.max(currentPhase - 1, 0), E.phases.length - 1);
 
   return (
     <div style={{ maxWidth: 1100, margin: "0 auto", padding: "36px 40px", display: "grid", gap: "var(--space-8)" }}>
@@ -134,14 +131,16 @@ export function DashboardScreen({ estate, completedIds = [], onOpenStep, onGoDoc
       </header>
 
       <Card padded>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "var(--space-6)", marginBottom: "var(--space-6)" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "var(--space-6)" }}>
           <StatBlock label="Assets" value={fmtMoney(assetTotal)} sub={`${assetCount} items, ${appraisedCount} appraised`} />
           <StatBlock label="Debts" value={fmtMoney(debtTotal)} tone="critical" sub={`${liveEstate ? liveEstate.debts.length : E.debts.length} creditors`} />
           <StatBlock label="Beneficiaries" value={String(beneficiaryCount)} sub={liveEstate ? liveEstate.beneficiaries.map((beneficiary) => cleanDashboardText(beneficiary.name.split(" ")[0])).join(", ") : "Dana, Sarah, Marcus"} />
-          <StatBlock label="Phase" value={`${currentIndex + 1} of 6`} tone={open.length === 0 ? "success" : "brand"} sub={cleanDashboardText(E.phases[currentIndex])} />
-        </div>
-        <div style={{ borderTop: "1px solid var(--border-subtle)", paddingTop: "var(--space-6)" }}>
-          <ProgressSteps current={currentIndex} steps={E.phases} />
+          <StatBlock
+            label="Completed tasks"
+            value={totalTaskCount === 0 ? "0" : `${completedTaskCount} of ${totalTaskCount}`}
+            tone={totalTaskCount > 0 && completedTaskCount === totalTaskCount ? "success" : "brand"}
+            sub={totalTaskCount === 0 ? "No tasks yet" : `${totalTaskCount - completedTaskCount} remaining`}
+          />
         </div>
       </Card>
 
@@ -155,6 +154,14 @@ export function DashboardScreen({ estate, completedIds = [], onOpenStep, onGoDoc
           Open any item for step-by-step instructions. Nothing is dismissed by accident, you mark a step complete when it's truly done.
         </p>
         <div style={{ display: "grid", gap: "var(--space-3)" }}>
+          {deadlineRefreshing ? (
+            <Card tint padded>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, color: "var(--text-muted)" }}>
+                <I.Bell size={18} color="var(--text-subtle)" />
+                <span style={{ fontSize: "var(--text-sm)", fontWeight: 600 }}>Checking for newly unlocked tasks...</span>
+              </div>
+            </Card>
+          ) : null}
           {liveAlertsLoading ? (
             <Card tint padded>
               <div style={{ display: "flex", alignItems: "center", gap: 10, color: "var(--text-muted)" }}>
@@ -183,28 +190,15 @@ export function DashboardScreen({ estate, completedIds = [], onOpenStep, onGoDoc
             <Card tint padded>
               <div style={{ display: "flex", alignItems: "center", gap: 10, color: "var(--success-text)" }}>
                 <I.CheckCircle size={20} color="var(--success-accent)" />
-                <span style={{ fontWeight: 600 }}>You're all caught up. We'll alert you the moment something needs you.</span>
+                <span>
+                  <strong style={{ display: "block" }}>No critical blockers found</strong>
+                  <span style={{ display: "block", marginTop: 3, fontSize: "var(--text-sm)" }}>Upload more documents or ask Executor what to check next.</span>
+                </span>
               </div>
             </Card>
           ) : null}
         </div>
 
-        {completed.length ? (
-          <div style={{ marginTop: "var(--space-5)" }}>
-            <h3 style={{ margin: "0 0 var(--space-3)", fontSize: "var(--text-xs)", fontWeight: 700, letterSpacing: "var(--tracking-caps)", textTransform: "uppercase", color: "var(--text-subtle)" }}>Completed</h3>
-            <ul style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: "var(--space-2)" }}>
-              {completed.map((a) => (
-                <li key={a.id}>
-                  <button onClick={() => onOpenStep && onOpenStep(a.id)}
-                    style={{ width: "100%", textAlign: "left", display: "flex", alignItems: "center", gap: 10, padding: "11px 16px", background: "var(--surface-card)", border: "1px solid var(--border-subtle)", borderRadius: "var(--radius-md)", cursor: "pointer", color: "var(--text-muted)", fontFamily: "var(--font-sans)", fontSize: "var(--text-sm)" }}>
-                    <I.CheckCircle size={17} color="var(--success-accent)" />
-                    <span style={{ textDecoration: "line-through" }}>{cleanDashboardText(a.title)}</span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
       </section>
 
       <section style={{ display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: "var(--space-6)", alignItems: "start" }}>
@@ -254,14 +248,15 @@ export function DashboardScreen({ estate, completedIds = [], onOpenStep, onGoDoc
 // Live dashboard built entirely from the agent's estate state. Shown for real
 // (non-demo) estates once at least one document has been parsed. Unlike the demo
 // view it never falls back to seed data, so it only ever shows this estate.
-function RealDashboard({ real, alerts, onOpenStep }: { real: EstateState; alerts: BackendAlert[]; onOpenStep?: (id: string) => void }) {
+function RealDashboard({ real, alerts, onOpenStep, deadlineRefreshing = false }: { real: EstateState; alerts: BackendAlert[]; onOpenStep?: (id: string) => void; deadlineRefreshing?: boolean }) {
   const I = ExecutorIcons;
   const openAlerts = alerts.filter((a) => !a.dismissed);
   const assetTotal = real.assets.reduce((sum, asset) => sum + (asset.estimatedValue ?? asset.appraisedValue ?? 0), 0);
   const appraisedCount = real.assets.filter((asset) => asset.appraised).length;
   const debtTotal = real.debts.reduce((sum, debt) => sum + debt.amount, 0);
   const notifiedCreditors = real.debts.filter((debt) => debt.notified).length;
-  const currentIndex = Math.min(Math.max(real.phase - 1, 0), DEMO_ESTATE.phases.length - 1);
+  const completedTaskCount = real.tasks.filter((task) => task.status === "done").length;
+  const totalTaskCount = real.tasks.length;
 
   const taskTone = { done: "success", todo: "neutral", in_progress: "brand", blocked: "warning" } as const;
   const taskLabel = { done: "Done", todo: "To do", in_progress: "In progress", blocked: "Blocked" } as const;
@@ -279,14 +274,16 @@ function RealDashboard({ real, alerts, onOpenStep }: { real: EstateState; alerts
       </header>
 
       <Card padded>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "var(--space-6)", marginBottom: "var(--space-6)" }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "var(--space-6)" }}>
           <StatBlock label="Assets" value={fmtMoney(assetTotal)} sub={`${real.assets.length} items, ${appraisedCount} appraised`} />
           <StatBlock label="Debts" value={fmtMoney(debtTotal)} tone="critical" sub={`${real.debts.length} creditors, ${notifiedCreditors} notified`} />
           <StatBlock label="Beneficiaries" value={String(real.beneficiaries.length)} sub={real.beneficiaries.map((beneficiary) => cleanDashboardText(beneficiary.name.split(" ")[0])).join(", ") || "None yet"} />
-          <StatBlock label="Phase" value={`${currentIndex + 1} of 6`} tone="brand" sub={cleanDashboardText(DEMO_ESTATE.phases[currentIndex])} />
-        </div>
-        <div style={{ borderTop: "1px solid var(--border-subtle)", paddingTop: "var(--space-6)" }}>
-          <ProgressSteps current={currentIndex} steps={DEMO_ESTATE.phases} />
+          <StatBlock
+            label="Completed tasks"
+            value={totalTaskCount === 0 ? "0" : `${completedTaskCount} of ${totalTaskCount}`}
+            tone={totalTaskCount > 0 && completedTaskCount === totalTaskCount ? "success" : "brand"}
+            sub={totalTaskCount === 0 ? "No tasks yet" : `${totalTaskCount - completedTaskCount} remaining`}
+          />
         </div>
       </Card>
 
@@ -294,6 +291,14 @@ function RealDashboard({ real, alerts, onOpenStep }: { real: EstateState; alerts
         <h2 style={{ margin: "0 0 var(--space-2)", fontFamily: "var(--font-display)", fontSize: "var(--text-xl)", fontWeight: 600, color: "var(--text-strong)" }}>What needs your attention</h2>
         <p style={{ margin: "0 0 var(--space-4)", fontSize: "var(--text-sm)", color: "var(--text-muted)" }}>Surfaced by the DeadlineAgent from your estate and California probate rules.</p>
         <div style={{ display: "grid", gap: "var(--space-3)" }}>
+          {deadlineRefreshing ? (
+            <Card tint padded>
+              <div style={{ display: "flex", alignItems: "center", gap: 10, color: "var(--text-muted)" }}>
+                <I.Bell size={18} color="var(--text-subtle)" />
+                <span style={{ fontSize: "var(--text-sm)", fontWeight: 600 }}>Checking for newly unlocked tasks...</span>
+              </div>
+            </Card>
+          ) : null}
           {openAlerts.map((a) => (
             <Alert
               key={a.id}
@@ -311,7 +316,10 @@ function RealDashboard({ real, alerts, onOpenStep }: { real: EstateState; alerts
             <Card tint padded>
               <div style={{ display: "flex", alignItems: "center", gap: 10, color: "var(--success-text)" }}>
                 <I.CheckCircle size={20} color="var(--success-accent)" />
-                <span style={{ fontWeight: 600 }}>Nothing needs you right now. I'll alert you the moment something does.</span>
+                <span>
+                  <strong style={{ display: "block" }}>No critical blockers found</strong>
+                  <span style={{ display: "block", marginTop: 3, fontSize: "var(--text-sm)" }}>Upload more documents or ask Executor what to check next.</span>
+                </span>
               </div>
             </Card>
           ) : null}

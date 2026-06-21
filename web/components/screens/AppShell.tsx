@@ -114,6 +114,13 @@ export function AppShell() {
   const [liveAlerts, setLiveAlerts] = React.useState<BackendAlert[] | null>(null);
   const [liveEstate, setLiveEstate] = React.useState<EstateState | null>(null);
   const [liveAlertsFailed, setLiveAlertsFailed] = React.useState(false);
+  const [deadlineRefreshing, setDeadlineRefreshing] = React.useState(false);
+  const activeEstateIdRef = React.useRef(activeEstateId);
+  const deadlineRefreshesRef = React.useRef(new Map<string, Promise<void>>());
+
+  React.useEffect(() => {
+    activeEstateIdRef.current = activeEstateId;
+  }, [activeEstateId]);
 
   React.useEffect(() => {
     try { window.localStorage.setItem(NOTIF_PREFS_KEY, JSON.stringify(notifPrefs)); } catch { /* ignore */ }
@@ -132,6 +139,7 @@ export function AppShell() {
     setCompletionError(null);
     setLiveEstate(null);
     setLiveAlerts(null);
+    setDeadlineRefreshing(deadlineRefreshesRef.current.has(activeEstateId));
     getEstate(activeEstateId, controller.signal)
       .then((estate) => {
         if (cancelled) return;
@@ -145,28 +153,6 @@ export function AppShell() {
           ),
         );
 
-        return runDeadlineAgent(activeEstateId, controller.signal)
-          .then((alerts) => {
-            if (cancelled) return null;
-            setLiveAlerts(alerts);
-            return getEstate(activeEstateId, controller.signal);
-          })
-          .then((updatedEstate) => {
-            if (cancelled || !updatedEstate) return;
-            setLiveEstate(updatedEstate);
-            setEstates((cur) =>
-              cur.map((item) =>
-                item.id === activeEstateId
-                  ? { ...item, phase: updatedEstate.phase, hasDocuments: item.id === "demo-milligan" || updatedEstate.documents.length > 0 }
-                  : item,
-              ),
-            );
-          })
-          .catch((error) => {
-            if (error instanceof DOMException && error.name === "AbortError") return;
-            if (cancelled) return;
-            setLiveAlertsFailed(true);
-          });
       })
       .catch((error) => {
         if (error instanceof DOMException && error.name === "AbortError") return;
@@ -230,24 +216,59 @@ export function AppShell() {
     setCompletionError(null);
     setDetailId(id);
   }
+  function refreshDeadlineAgentInBackground(id: string): Promise<void> {
+    const existing = deadlineRefreshesRef.current.get(id);
+    if (existing) return existing;
+
+    if (activeEstateIdRef.current === id) setDeadlineRefreshing(true);
+    const refresh = (async () => {
+      try {
+        const alerts = await runDeadlineAgent(id);
+        const estate = await getEstate(id);
+        if (activeEstateIdRef.current !== id) return;
+        setLiveAlerts(alerts);
+        setLiveEstate(estate);
+        setLiveAlertsFailed(false);
+        setEstates((cur) =>
+          cur.map((item) =>
+            item.id === id
+              ? { ...item, phase: estate.phase, hasDocuments: item.id === "demo-milligan" || estate.documents.length > 0 }
+              : item,
+          ),
+        );
+      } catch {
+        if (activeEstateIdRef.current === id) setLiveAlertsFailed(true);
+      } finally {
+        deadlineRefreshesRef.current.delete(id);
+        if (activeEstateIdRef.current === id) setDeadlineRefreshing(false);
+      }
+    })();
+    deadlineRefreshesRef.current.set(id, refresh);
+    return refresh;
+  }
   async function completeStep(id: string) {
+    const estateId = activeEstateId;
     setCompletionError(null);
     setCompletingId(id);
+    setCompletedIds((current) => (current.includes(id) ? current : [...current, id]));
+    setDetailId(null);
+    setRoute("dashboard");
     try {
-      const estate = await completeAlert(activeEstateId, id);
-      setCompletedIds((c) => (c.includes(id) ? c : [...c, id]));
+      const estate = await completeAlert(estateId, id);
       setLiveEstate(estate);
       setLiveAlerts(estate.alerts);
       setEstates((cur) =>
         cur.map((item) =>
-          item.id === activeEstateId
+          item.id === estateId
             ? { ...item, phase: estate.phase, hasDocuments: item.id === "demo-milligan" || estate.documents.length > 0 }
             : item,
         ),
       );
-      setDetailId(null);
+      void refreshDeadlineAgentInBackground(estateId);
     } catch (error) {
+      setCompletedIds((current) => current.filter((completedId) => completedId !== id));
       setCompletionError(error instanceof Error ? error.message : "We couldn't mark that step complete.");
+      setDetailId(id);
     } finally {
       setCompletingId(null);
     }
@@ -263,7 +284,7 @@ export function AppShell() {
   // this only changed sidebar metadata, leaving next steps stale until reload.
   async function refreshEstate(id: string) {
     try {
-      let estate = await getEstate(id);
+      const estate = await getEstate(id);
       setLiveEstate(estate);
       setLiveAlerts(estate.alerts);
       setEstates((cur) =>
@@ -274,21 +295,8 @@ export function AppShell() {
         ),
       );
 
-      const alerts = await runDeadlineAgent(id);
-      estate = await getEstate(id);
-      setLiveAlerts(alerts);
-      setLiveEstate(estate);
       setLiveAlertsFailed(false);
-      setEstates((cur) =>
-        cur.map((e) =>
-          e.id === id
-            ? { ...e, phase: estate.phase, hasDocuments: e.id === "demo-milligan" || estate.documents.length > 0 }
-            : e,
-        ),
-      );
     } catch {
-      // Keep the successfully fetched estate visible if only the agent rerun
-      // fails; its stored alerts are still more current than the old snapshot.
       setLiveAlertsFailed(true);
     }
   }
@@ -342,7 +350,7 @@ export function AppShell() {
   } else {
     crumb = titles[route];
     if (route === "dashboard")
-      body = <DashboardScreen key={active.id} estate={active} completedIds={completedIds} onOpenStep={openStep} onGoDocuments={() => navigate("documents")} liveAlerts={liveAlerts} liveEstate={liveEstate} liveAlertsFailed={liveAlertsFailed} />;
+      body = <DashboardScreen key={active.id} estate={active} completedIds={completedIds} onOpenStep={openStep} onGoDocuments={() => navigate("documents")} liveAlerts={liveAlerts} liveEstate={liveEstate} liveAlertsFailed={liveAlertsFailed} deadlineRefreshing={deadlineRefreshing} />;
     else if (route === "documents") body = <UploadScreen key={active.id} estate={active} onDocumentsChanged={() => refreshEstate(active.id)} />;
     else if (route === "chat") body = <ChatScreen key={active.id} estate={active} />;
     else if (route === "letters") body = <LettersScreen key={active.id} estate={active} />;
