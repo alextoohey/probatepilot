@@ -29,7 +29,8 @@ from prompts.letters import (
     normalize_letter_type,
 )
 from prompts.system import build_chat_prompt
-from schemas.api import AnyDocumentExtraction, ChatHistoryResponse, ChatRequest, ChatSessionResponse, ChatSessionsResponse, ChatSuggestionsRequest, ChatSuggestionsResponse, DeadlineAgentRequest, GenerateLetterRequest, ParseDocumentResponse
+from notify.email import build_alert_digest, build_weekly_recap, email_configured, resolve_recipient, send_email
+from schemas.api import AnyDocumentExtraction, ChatHistoryResponse, ChatRequest, ChatSessionResponse, ChatSessionsResponse, ChatSuggestionsRequest, ChatSuggestionsResponse, DeadlineAgentRequest, GenerateLetterRequest, NotifyEmailRequest, NotifyEmailResponse, ParseDocumentResponse
 from schemas.auth import AuthResponse, LoginRequest, MeResponse, PublicUser, RegisterRequest, User
 from schemas.documents import BankStatementExtraction, DeedExtraction, WillExtraction
 from schemas.estate import Asset, EstateState, Executor, UploadedDocument, utc_now_iso
@@ -478,6 +479,34 @@ async def chat_suggestions(request: ChatSuggestionsRequest) -> ChatSuggestionsRe
             _suggestion_fallback(estate_state),
         )
         return ChatSuggestionsResponse(estateId=request.estateId, suggestions=suggestions[:3])
+
+
+@app.post("/notify/email")
+async def notify_email(request: NotifyEmailRequest) -> NotifyEmailResponse:
+    """Email the executor a digest of the estate's current deadline/liability alerts."""
+    with span("route.notify_email", estate_id=request.estateId, action_type="notify_email") as current_span:
+        estate_state = get_estate_state(request.estateId)
+        recipient = resolve_recipient((request.recipientEmail or estate_state.executor.email or "").strip())
+        # Fresh alerts straight from the DeadlineAgent — same source as the dashboard.
+        alerts = await run_deadline_agent(request.estateId)
+        if request.kind == "weekly":
+            subject, body = build_weekly_recap(estate_state, alerts)
+        else:
+            subject, body = build_alert_digest(estate_state, alerts)
+        result = send_email(recipient, subject, body)
+        set_span_attribute(current_span, "email_configured", email_configured())
+        set_span_attribute(current_span, "email_sent", bool(result.get("sent")))
+        set_span_attribute(current_span, "alert_count", len(alerts))
+        set_span_attribute(current_span, "email_kind", request.kind)
+        return NotifyEmailResponse(
+            estateId=request.estateId,
+            sent=bool(result.get("sent")),
+            reason=str(result.get("reason", "unknown")),
+            recipient=recipient or None,
+            alertCount=len(alerts),
+            subject=subject,
+            body=body,
+        )
 
 
 @app.post("/generate-letter")
