@@ -72,6 +72,15 @@ class ChatSessionResponse(ContractModel):
     messages: list[ChatMessage] = Field(default_factory=list)
 
 
+class ChatSuggestionsRequest(ContractModel):
+    estateId: str = "demo-milligan"
+
+
+class ChatSuggestionsResponse(ContractModel):
+    estateId: str
+    suggestions: list[str] = Field(default_factory=list)
+
+
 class GenerateLetterRequest(ContractModel):
     estateId: str = "demo-milligan"
     letterType: str = "creditor_notice"

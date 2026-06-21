@@ -1,5 +1,6 @@
 import {
   chatHistoryResponseSchema,
+  chatSuggestionsResponseSchema,
   chatRequestSchema,
   chatSessionResponseSchema,
   chatSessionsResponseSchema,
@@ -136,6 +137,18 @@ export async function getChatHistory(estateId = DEFAULT_ESTATE_ID, sessionId?: s
   if (!response.ok) return [];
   const payload = await response.json();
   return chatHistoryResponseSchema.parse(payload).messages;
+}
+
+export async function getChatSuggestions(estateId = DEFAULT_ESTATE_ID, signal?: AbortSignal): Promise<string[]> {
+  const response = await fetch("/api/agent/chat-suggestions", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ estateId }),
+    signal,
+  });
+  if (!response.ok) return [];
+  const payload = await response.json();
+  return chatSuggestionsResponseSchema.parse(payload).suggestions;
 }
 
 export async function getChatSessions(estateId = DEFAULT_ESTATE_ID, signal?: AbortSignal): Promise<ChatSession[]> {
