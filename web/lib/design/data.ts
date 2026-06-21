@@ -340,11 +340,15 @@ export type EstateProfile = {
   county: string;
   phase: number;
   seeded: boolean;
+  // True for the demo, or once a real estate has at least one parsed document.
+  // Gates the chat and letters screens; distinct from `seeded`, which drives the
+  // cosmetic demo data.
+  hasDocuments: boolean;
 };
 
 export const ESTATE_PROFILES: EstateProfile[] = [
-  { id: "demo-milligan", deceasedName: "Robert A. Milligan", role: "Executor", relationship: "Father", state: "California", county: "Alameda", phase: 2, seeded: true },
-  { id: "est-reyes", deceasedName: "Gloria Reyes", role: "Co-executor", relationship: "Aunt", state: "California", county: "Contra Costa", phase: 1, seeded: false },
+  { id: "demo-milligan", deceasedName: "Robert A. Milligan", role: "Executor", relationship: "Father", state: "California", county: "Alameda", phase: 2, seeded: true, hasDocuments: true },
+  { id: "est-reyes", deceasedName: "Gloria Reyes", role: "Co-executor", relationship: "Aunt", state: "California", county: "Contra Costa", phase: 1, seeded: false, hasDocuments: false },
 ];
 
 export const GENDER_OPTIONS = ["Female", "Male", "Non-binary", "Prefer not to say"];
