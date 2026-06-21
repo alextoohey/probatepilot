@@ -310,7 +310,7 @@ export function UploadScreen({ estate }: Props) {
           </ul>
         </Card>
 
-        <Card title="Estate, reconstructed" subtitle={seeded ? "Extracted from your documents. Edit anything we got wrong." : "Builds automatically as you add documents"} padded={false}
+        <Card title="Assets" subtitle="Pulled from your documents. Add or adjust as needed." padded={false}
           footer={<Button variant="secondary" size="sm" leadingIcon={<I.Plus size={15} />} onClick={addAsset}>Add asset</Button>}>
           <ul style={{ listStyle: "none", margin: 0, padding: 0 }}>
             {assets.length === 0 ? (
