@@ -5,6 +5,7 @@ import logging
 import os
 from typing import Any, TypeVar
 
+import anthropic
 from observability.arize import set_span_attribute, set_span_error, span
 from pydantic import BaseModel
 
@@ -20,20 +21,28 @@ CHAT_STREAM_FALLBACK = (
     "asking for a legal judgment, This requires your attorney's input — it involves legal advice."
 )
 
+_client: anthropic.Anthropic | None = None
+_async_client: anthropic.AsyncAnthropic | None = None
 
-def get_client() -> Any | None:
-    """Return an Anthropic async client when configured, else None.
 
-    Existing offline placeholders keep working when ANTHROPIC_API_KEY is absent.
-    """
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
+def get_client() -> anthropic.Anthropic | None:
+    """Return a sync Anthropic client when configured, else None."""
+    global _client
+    if not os.getenv("ANTHROPIC_API_KEY"):
         return None
-    try:
-        from anthropic import AsyncAnthropic
-    except Exception:
+    if _client is None:
+        _client = anthropic.Anthropic()
+    return _client
+
+
+def get_async_client() -> anthropic.AsyncAnthropic | None:
+    """Return an async Anthropic client when configured, else None."""
+    global _async_client
+    if not os.getenv("ANTHROPIC_API_KEY"):
         return None
-    return AsyncAnthropic(api_key=api_key)
+    if _async_client is None:
+        _async_client = anthropic.AsyncAnthropic()
+    return _async_client
 
 
 async def create_reasoning_message(
@@ -47,7 +56,7 @@ async def create_reasoning_message(
 
     Raises when the client is unavailable so callers can use deterministic fallback.
     """
-    client = get_client()
+    client = get_async_client()
     if client is None:
         raise RuntimeError("Anthropic client is unavailable.")
 
@@ -75,11 +84,7 @@ async def structured_extract(
     response_model: type[ModelT],
     fallback: dict[str, Any] | None = None,
 ) -> ModelT:
-    """Return a validated placeholder extraction.
-
-    The real implementation should call Anthropic structured output parsing. Keeping this
-    function importable unblocks parser and route work before API keys are available.
-    """
+    """Extract structured document data with Claude, falling back to deterministic data."""
     with span(
         "llm.structured_extract",
         action_type="document_parse",
@@ -88,7 +93,45 @@ async def structured_extract(
         response_model=response_model.__name__,
         prompt_length=len(prompt),
         content_length=len(content),
-    ):
+    ) as current_span:
+        tool_name = response_model.__name__
+        schema = response_model.model_json_schema()
+        schema.pop("title", None)
+        client = get_client()
+        if client is None:
+            set_span_attribute(current_span, "fallback_used", True)
+            set_span_attribute(current_span, "fallback_reason", "anthropic_client_unavailable")
+            return response_model.model_validate(fallback or {})
+
+        try:
+            response = client.messages.create(
+                model=DOCUMENT_MODEL,
+                max_tokens=4096,
+                tools=[{
+                    "name": tool_name,
+                    "description": f"Extract all {tool_name} fields from the provided document.",
+                    "input_schema": schema,
+                }],
+                tool_choice={"type": "tool", "name": tool_name},
+                messages=[{
+                    "role": "user",
+                    "content": f"{prompt}\n\nDOCUMENT CONTENT:\n{content}",
+                }],
+            )
+
+            for block in response.content:
+                if block.type == "tool_use" and block.name == tool_name:
+                    set_span_attribute(current_span, "fallback_used", False)
+                    set_span_attribute(current_span, "fallback_reason", "")
+                    return response_model.model_validate(block.input)
+
+            set_span_attribute(current_span, "fallback_reason", "missing_tool_use")
+        except Exception as exc:
+            set_span_error(current_span, exc)
+            set_span_attribute(current_span, "fallback_reason", f"{exc.__class__.__name__}: {str(exc)[:160]}")
+            LOGGER.exception("Claude structured extraction failed; using deterministic fallback.")
+
+        set_span_attribute(current_span, "fallback_used", True)
         return response_model.model_validate(fallback or {})
 
 
@@ -109,7 +152,7 @@ async def generate_letter_draft(
         letter_type=letter_type,
         prompt_length=len(prompt),
     ) as current_span:
-        client = get_client()
+        client = get_async_client()
         if client is None:
             set_span_attribute(current_span, "fallback_used", True)
             set_span_attribute(current_span, "fallback_reason", "anthropic_client_unavailable")
@@ -152,7 +195,7 @@ async def stream_chat(prompt: str, message: str) -> AsyncIterator[str]:
         prompt_length=len(prompt),
         message_length=len(message),
     ) as current_span:
-        client = get_client()
+        client = get_async_client()
         if client is not None:
             try:
                 async with client.messages.stream(
