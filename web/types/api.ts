@@ -12,9 +12,24 @@ export interface SearchResult {
 
 export interface ParseDocumentResponse {
   estateId: string;
+  fileName?: string | null;
   extraction: AnyDocumentExtraction;
   documentType: string;
   needsTypeSelection: boolean;
+  reviewMessage?: string | null;
+  alerts: Alert[];
+}
+
+export interface ParseDocumentFailure {
+  fileName: string;
+  detail: string;
+  statusCode: number;
+}
+
+export interface ParseDocumentsResponse {
+  estateId: string;
+  results: ParseDocumentResponse[];
+  failed: ParseDocumentFailure[];
   alerts: Alert[];
 }
 
@@ -25,6 +40,11 @@ export interface DeadlineAgentRequest {
 export interface DeadlineAgentResponse {
   estateId: string;
   alerts: Alert[];
+}
+
+export interface CompleteAlertRequest {
+  estateId: string;
+  alertId: string;
 }
 
 export interface ChatRequest {

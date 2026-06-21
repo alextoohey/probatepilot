@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from pydantic import Field
 
-from .documents import BankStatementExtraction, DeedExtraction, UnknownDocumentExtraction, WillExtraction
-from .estate import Alert, ContractModel, EstateState
+from .documents import BankStatementExtraction, CreditorNoticeExtraction, DeedExtraction, UnknownDocumentExtraction, WillExtraction
+from .estate import Alert, ContractModel, EstateState, SavedLetter
 
-AnyDocumentExtraction = WillExtraction | BankStatementExtraction | DeedExtraction | UnknownDocumentExtraction
+AnyDocumentExtraction = WillExtraction | BankStatementExtraction | DeedExtraction | CreditorNoticeExtraction | UnknownDocumentExtraction
 
 
 class SearchResult(ContractModel):
@@ -19,6 +19,7 @@ class SearchResult(ContractModel):
 
 class ParseDocumentResponse(ContractModel):
     estateId: str
+    fileName: str | None = None
     extraction: AnyDocumentExtraction
     # The resolved document type the file was stored under (the user's choice when
     # they manually selected one, otherwise the auto-detected type).
@@ -26,11 +27,30 @@ class ParseDocumentResponse(ContractModel):
     # True when auto-detection failed and no type was supplied, so the UI should
     # prompt the user to pick the document type. Nothing is stored in this case.
     needsTypeSelection: bool = False
+    reviewMessage: str | None = None
+    alerts: list[Alert] = Field(default_factory=list)
+
+
+class ParseDocumentFailure(ContractModel):
+    fileName: str
+    detail: str
+    statusCode: int = 422
+
+
+class ParseDocumentsResponse(ContractModel):
+    estateId: str
+    results: list[ParseDocumentResponse] = Field(default_factory=list)
+    failed: list[ParseDocumentFailure] = Field(default_factory=list)
     alerts: list[Alert] = Field(default_factory=list)
 
 
 class DeadlineAgentRequest(ContractModel):
     estateId: str = "demo-milligan"
+
+
+class CompleteAlertRequest(ContractModel):
+    estateId: str = "demo-milligan"
+    alertId: str
 
 
 class ChatRequest(ContractModel):
@@ -106,6 +126,18 @@ class GenerateLetterRequest(ContractModel):
     recipientName: str | None = None
     # Free-text description for a custom letter (letterType == "custom").
     instructions: str | None = None
+
+
+class SaveLetterRequest(ContractModel):
+    estateId: str
+    letterType: str
+    recipientName: str | None = None
+    draft: str
+
+
+class SaveLetterResponse(ContractModel):
+    estateId: str
+    letter: SavedLetter
 
 
 class EstateResponse(ContractModel):

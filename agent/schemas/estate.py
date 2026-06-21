@@ -21,6 +21,7 @@ AssetType = Literal[
 DebtType = Literal["secured", "unsecured", "priority"]
 AlertSeverity = Literal["critical", "warning", "info"]
 AlertType = Literal["deadline", "liability", "missing_doc", "rule_violation"]
+AlertTimingStatus = Literal["dated", "blocking", "prerequisite", "missing_data", "no_deadline"]
 TaskStatus = Literal["todo", "in_progress", "done", "blocked"]
 EstatePhase = Literal[1, 2, 3, 4, 5, 6]
 
@@ -87,9 +88,20 @@ class Alert(ContractModel):
     body: str
     rule: str
     daysRemaining: int | None = None
+    timingStatus: AlertTimingStatus = "no_deadline"
     actionRequired: str
+    whatYouNeed: list[str] = Field(default_factory=list)
+    steps: list[str] = Field(default_factory=list)
     createdAt: str = Field(default_factory=utc_now_iso)
     dismissed: bool = False
+
+
+class SavedLetter(ContractModel):
+    id: str
+    letterType: str
+    recipientName: str | None = None
+    draft: str
+    savedAt: str = Field(default_factory=utc_now_iso)
 
 
 class EstateState(ContractModel):
@@ -98,6 +110,7 @@ class EstateState(ContractModel):
     dateOfDeath: str
     appointmentDate: str
     state: Literal["california"] = "california"
+    county: str | None = None
     executor: Executor
     assets: list[Asset] = Field(default_factory=list)
     debts: list[Debt] = Field(default_factory=list)
@@ -105,6 +118,7 @@ class EstateState(ContractModel):
     documents: list[UploadedDocument] = Field(default_factory=list)
     tasks: list[Task] = Field(default_factory=list)
     alerts: list[Alert] = Field(default_factory=list)
+    letters: list[SavedLetter] = Field(default_factory=list)
     phase: EstatePhase = 1
     createdAt: str = Field(default_factory=utc_now_iso)
     updatedAt: str = Field(default_factory=utc_now_iso)

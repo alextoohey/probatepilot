@@ -419,7 +419,7 @@ def merge_estate_state(estate_id: str, partial: dict[str, Any]) -> EstateState:
     except KeyError:
         estate = _blank_estate_state(estate_id, partial)
 
-    append_keys = {"assets", "debts", "beneficiaries", "documents", "tasks", "alerts"}
+    append_keys = {"assets", "debts", "beneficiaries", "documents", "tasks", "alerts", "letters"}
     estate_payload = estate.model_dump()
 
     for key, value in _plain(partial).items():
@@ -450,6 +450,24 @@ def add_document(estate_id: str, document: UploadedDocument) -> EstateState:
     return merge_estate_state(estate_id, {"documents": [document]})
 
 
+def delete_document(estate_id: str, doc_id: str) -> UploadedDocument | None:
+    estate = get_estate_state(estate_id)
+    document = next((doc for doc in estate.documents if doc.id == doc_id), None)
+    if document is None:
+        return None
+
+    estate.documents = [doc for doc in estate.documents if doc.id != doc_id]
+    set_estate_state(estate)
+    delete_document_file(estate_id, doc_id)
+    try:
+        delete_document_vectors(estate_id, document.fileName)
+    except Exception:
+        # The file and estate metadata are the source of truth for deletion. Vector
+        # cleanup is best-effort because providers differ in delete/list support.
+        pass
+    return document
+
+
 def set_document_file(estate_id: str, doc_id: str, content_type: str, data: bytes) -> None:
     """Store the original uploaded bytes so the UI can preview/download the real
     file. Persisted as base64 JSON alongside its content type."""
@@ -463,6 +481,18 @@ def set_document_file(estate_id: str, doc_id: str, content_type: str, data: byte
         _redis_cloud().set(key, record)
         return
     _DOC_FILES[key] = {"contentType": content_type, "data": data}
+
+
+def delete_document_file(estate_id: str, doc_id: str) -> None:
+    key = document_file_key(estate_id, doc_id)
+
+    if _use_upstash():
+        _redis().delete(key)
+        return
+    if _use_redis_cloud():
+        _redis_cloud().delete(key)
+        return
+    _DOC_FILES.pop(key, None)
 
 
 def get_document_file(estate_id: str, doc_id: str) -> dict[str, Any] | None:
@@ -579,6 +609,28 @@ def clear_estate_vectors(estate_id: str) -> int:
 
     before = len(_VECTORS)
     _VECTORS[:] = [item for item in _VECTORS if item["estateId"] != estate_id]
+    return before - len(_VECTORS)
+
+
+def delete_document_vectors(estate_id: str, source: str, max_chunks: int = 100) -> int:
+    if _use_upstash():
+        ids = [chunk_id(estate_id, source, index) for index in range(max_chunks)]
+        try:
+            _vector().delete(ids)
+        except TypeError:
+            _vector().delete(ids=ids)
+        return len(ids)
+
+    if _use_redis_cloud():
+        key = vector_set_key(estate_id)
+        removed = 0
+        redis_client = _redis_cloud()
+        for index in range(max_chunks):
+            removed += int(redis_client.execute_command("VREM", key, chunk_id(estate_id, source, index)) or 0)
+        return removed
+
+    before = len(_VECTORS)
+    _VECTORS[:] = [item for item in _VECTORS if not (item["estateId"] == estate_id and item.get("source") == source)]
     return before - len(_VECTORS)
 
 

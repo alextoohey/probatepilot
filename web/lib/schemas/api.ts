@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { documentExtractionSchema } from "./documents";
-import { alertSchema, estateStateSchema } from "./estate";
+import { alertSchema, estateStateSchema, savedLetterSchema } from "./estate";
 
 export const searchResultSchema = z.object({
   text: z.string(),
@@ -13,6 +13,11 @@ export const searchResultSchema = z.object({
 
 export const deadlineAgentRequestSchema = z.object({
   estateId: z.string(),
+}).strict();
+
+export const completeAlertRequestSchema = z.object({
+  estateId: z.string(),
+  alertId: z.string(),
 }).strict();
 
 export const chatRequestSchema = z.object({
@@ -31,9 +36,24 @@ export const generateLetterRequestSchema = z.object({
 
 export const parseDocumentResponseSchema = z.object({
   estateId: z.string(),
+  fileName: z.string().nullable().optional(),
   extraction: documentExtractionSchema,
   documentType: z.string(),
   needsTypeSelection: z.boolean(),
+  reviewMessage: z.string().nullable().optional(),
+  alerts: z.array(alertSchema),
+}).strict();
+
+export const parseDocumentFailureSchema = z.object({
+  fileName: z.string(),
+  detail: z.string(),
+  statusCode: z.number().int(),
+}).strict();
+
+export const parseDocumentsResponseSchema = z.object({
+  estateId: z.string(),
+  results: z.array(parseDocumentResponseSchema),
+  failed: z.array(parseDocumentFailureSchema),
   alerts: z.array(alertSchema),
 }).strict();
 
@@ -58,6 +78,18 @@ export const chatHistoryResponseSchema = z.object({
   estateId: z.string(),
   sessionId: z.string().nullable().optional(),
   messages: z.array(chatMessageSchema),
+}).strict();
+
+export const saveLetterRequestSchema = z.object({
+  estateId: z.string(),
+  letterType: z.string(),
+  recipientName: z.string().nullable().optional(),
+  draft: z.string(),
+}).strict();
+
+export const saveLetterResponseSchema = z.object({
+  estateId: z.string(),
+  letter: savedLetterSchema,
 }).strict();
 
 export const chatSessionSchema = z.object({

@@ -67,9 +67,20 @@ export const alertSchema = z.object({
   body: z.string(),
   rule: z.string(),
   daysRemaining: z.number().nullable().optional(),
+  timingStatus: z.enum(["dated", "blocking", "prerequisite", "missing_data", "no_deadline"]).optional(),
   actionRequired: z.string(),
+  whatYouNeed: z.array(z.string()),
+  steps: z.array(z.string()),
   createdAt: z.string(),
   dismissed: z.boolean(),
+}).strict();
+
+export const savedLetterSchema = z.object({
+  id: z.string(),
+  letterType: z.string(),
+  recipientName: z.string().nullable().optional(),
+  draft: z.string(),
+  savedAt: z.string(),
 }).strict();
 
 export const estateStateSchema = z.object({
@@ -78,6 +89,7 @@ export const estateStateSchema = z.object({
   dateOfDeath: z.string(),
   appointmentDate: z.string(),
   state: z.literal("california"),
+  county: z.string().nullable().optional(),
   executor: executorSchema,
   assets: z.array(assetSchema),
   debts: z.array(debtSchema),
@@ -85,6 +97,7 @@ export const estateStateSchema = z.object({
   documents: z.array(uploadedDocumentSchema),
   tasks: z.array(taskSchema),
   alerts: z.array(alertSchema),
+  letters: z.array(savedLetterSchema),
   phase: estatePhaseSchema,
   createdAt: z.string(),
   updatedAt: z.string(),

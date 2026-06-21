@@ -8,6 +8,7 @@ export type AssetType =
 
 export type AlertSeverity = "critical" | "warning" | "info";
 export type AlertType = "deadline" | "liability" | "missing_doc" | "rule_violation";
+export type AlertTimingStatus = "dated" | "blocking" | "prerequisite" | "missing_data" | "no_deadline";
 export type EstatePhase = 1 | 2 | 3 | 4 | 5 | 6;
 export type TaskStatus = "todo" | "in_progress" | "done" | "blocked";
 
@@ -69,9 +70,20 @@ export interface Alert {
   body: string;
   rule: string;
   daysRemaining?: number | null;
+  timingStatus?: AlertTimingStatus;
   actionRequired: string;
+  whatYouNeed: string[];
+  steps: string[];
   createdAt: string;
   dismissed: boolean;
+}
+
+export interface SavedLetter {
+  id: string;
+  letterType: string;
+  recipientName?: string | null;
+  draft: string;
+  savedAt: string;
 }
 
 export interface EstateState {
@@ -80,6 +92,7 @@ export interface EstateState {
   dateOfDeath: string;
   appointmentDate: string;
   state: "california";
+  county?: string | null;
   executor: Executor;
   assets: Asset[];
   debts: Debt[];
@@ -87,6 +100,7 @@ export interface EstateState {
   documents: UploadedDocument[];
   tasks: Task[];
   alerts: Alert[];
+  letters: SavedLetter[];
   phase: EstatePhase;
   createdAt: string;
   updatedAt: string;
