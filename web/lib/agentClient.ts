@@ -100,9 +100,14 @@ export async function runDeadlineAgent(estateId = DEFAULT_ESTATE_ID): Promise<Al
   return deadlineAgentResponseSchema.parse(payload).alerts;
 }
 
-export async function parseDocument(file: File, estateId = DEFAULT_ESTATE_ID): Promise<ParseDocumentResponse> {
+export async function parseDocument(
+  file: File,
+  estateId = DEFAULT_ESTATE_ID,
+  documentType?: string,
+): Promise<ParseDocumentResponse> {
   const body = new FormData();
   body.append("estateId", estateId);
+  if (documentType) body.append("documentType", documentType);
   body.append("file", file);
   const response = await fetch("/api/agent/parse-document", { method: "POST", body });
   if (!response.ok) {

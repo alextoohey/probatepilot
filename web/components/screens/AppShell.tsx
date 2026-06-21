@@ -80,7 +80,7 @@ export function AppShell() {
         setLiveEstate(estate);
       })
       .catch(() => {});
-  }, [activeEstateId]);
+  }, [activeEstateId, estates]);
   const titles: Record<Route, string> = { dashboard: "Dashboard", documents: "Documents", chat: "Estate chat", letters: "Letters" };
 
   // Load the logged-in user and their estates. A missing/stale session bounces
