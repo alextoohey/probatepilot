@@ -5,7 +5,7 @@ import logging
 import os
 import re
 
-from llm.claude import DOCUMENT_MODEL, get_client
+from llm.claude import DOCUMENT_MODEL, get_async_client, get_client
 from observability.arize import set_span_attribute, span
 from prompts.extraction import TYPE_DETECTION_PROMPT
 from schemas.documents import DocumentExtraction, UnknownDocumentExtraction
@@ -49,6 +49,15 @@ async def parse_document_text(
     text: str,
     filename: str = "",
     forced_type: str | None = None,
+) -> DocumentExtraction:
+    extraction, _ = await parse_document_text_with_type(text, filename=filename, forced_type=forced_type)
+    return extraction
+
+
+async def parse_document_text_with_type(
+    text: str,
+    filename: str = "",
+    forced_type: str | None = None,
 ) -> tuple[DocumentExtraction, str]:
     """Parse a document, returning the extraction and the resolved document type.
 
@@ -56,7 +65,7 @@ async def parse_document_text(
     of auto-detection (content + fuzzy filename matching). It is the label the
     caller should store the document under.
     """
-    document_type = forced_type or resolve_document_type(text, filename)
+    document_type = forced_type or await resolve_document_type_async(text, filename)
     with span(
         "documents.parse",
         action_type="document_parse",
@@ -95,6 +104,23 @@ def resolve_document_type(text: str, filename: str = "") -> str:
     by_name = detect_type_from_filename(filename)
     if by_name:
         return by_name
+
+    return "unknown"
+
+
+async def resolve_document_type_async(text: str, filename: str = "") -> str:
+    """Async resolver used by upload routes so Claude detection can run in parallel."""
+    primary = _keyword_detect(text)
+    if primary in PARSEABLE_TYPES:
+        return primary
+
+    by_name = detect_type_from_filename(filename)
+    if by_name:
+        return by_name
+
+    primary = await _detect_type_async(text)
+    if primary in PARSEABLE_TYPES:
+        return primary
 
     return "unknown"
 
@@ -166,6 +192,35 @@ def _detect_type(text: str) -> str:
         return _keyword_detect(text)
 
 
+async def _detect_type_async(text: str) -> str:
+    sample = text[:1500].strip()
+    if not sample:
+        return "unknown"
+    if not os.getenv("ANTHROPIC_API_KEY"):
+        return _keyword_detect(text)
+
+    client = get_async_client()
+    if client is None:
+        return _keyword_detect(text)
+
+    try:
+        response = await client.messages.create(
+            model=DOCUMENT_MODEL,
+            max_tokens=16,
+            messages=[{
+                "role": "user",
+                "content": f"{TYPE_DETECTION_PROMPT}\n\nDOCUMENT BEGINNING:\n{sample}",
+            }],
+        )
+        label = response.content[0].text.strip().lower()
+        if label in PARSEABLE_TYPES:
+            return label
+        return "unknown"
+    except Exception:
+        LOGGER.exception("Claude document type detection failed; using keyword fallback.")
+        return _keyword_detect(text)
+
+
 def _keyword_detect(text: str) -> str:
     lowered = text.lower()
     if "last will" in lowered or "testament" in lowered:
@@ -174,6 +229,8 @@ def _keyword_detect(text: str) -> str:
         "bank statement" in lowered
         or "brokerage statement" in lowered
         or "account statement" in lowered
+        or "checking statement" in lowered
+        or "savings statement" in lowered
         or ("statement period" in lowered and "balance" in lowered)
     ):
         return "bank_statement"

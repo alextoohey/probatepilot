@@ -18,7 +18,7 @@ from fastapi.responses import Response, StreamingResponse
 from agents.deadline_agent import mark_alert_complete, run_deadline_agent
 from auth.security import hash_password, new_session_token, verify_password
 from documents.pdf_reader import extract_text
-from documents.router import parse_document_text
+from documents.router import parse_document_text_with_type as parse_document_text
 from llm.claude import DocumentParseError, generate_letter_draft, stream_chat
 from llm.embeddings import embed_query, embed_texts
 from observability.arize import get_tracing_status, init_tracing, set_span_attribute, set_span_error, span
@@ -460,7 +460,7 @@ async def _call_parse_document_text(text: str, filename: str, forced_type: str |
         return await parse_document_text(text, forced_type=forced_type)
 
 
-def _store_parsed_upload(estate_id: str, parsed: ParsedUpload) -> None:
+def _store_parsed_upload(estate_id: str, parsed: ParsedUpload, *, embed_chunks: bool = True) -> None:
     if parsed.needs_type_selection:
         return
 
@@ -474,9 +474,33 @@ def _store_parsed_upload(estate_id: str, parsed: ParsedUpload) -> None:
     )
 
     chunks = parsed.extraction.rawChunks
-    if chunks:
+    if embed_chunks and chunks:
         embeddings = embed_texts(chunks)
         upsert_vectors(estate_id, chunks, embeddings, source=parsed.filename, document_type=parsed.resolved_type)
+
+
+def _embed_stored_uploads(estate_id: str, parsed_uploads: list[ParsedUpload]) -> None:
+    chunk_records: list[tuple[ParsedUpload, list[str]]] = [
+        (parsed, parsed.extraction.rawChunks)
+        for parsed in parsed_uploads
+        if not parsed.needs_type_selection and parsed.extraction.rawChunks
+    ]
+    all_chunks = [chunk for _, chunks in chunk_records for chunk in chunks]
+    if not all_chunks:
+        return
+
+    embeddings = embed_texts(all_chunks)
+    offset = 0
+    for parsed, chunks in chunk_records:
+        next_offset = offset + len(chunks)
+        upsert_vectors(
+            estate_id,
+            chunks,
+            embeddings[offset:next_offset],
+            source=parsed.filename,
+            document_type=parsed.resolved_type,
+        )
+        offset = next_offset
 
 
 def _parse_response_from_upload(
@@ -526,7 +550,7 @@ async def parse_documents(
 
     responses: list[ParseDocumentResponse] = []
     failures: list[ParseDocumentFailure] = []
-    stored_any = False
+    stored_uploads: list[ParsedUpload] = []
 
     for file, result in zip(files, parsed_results, strict=False):
         filename = file.filename or "upload"
@@ -540,10 +564,12 @@ async def parse_documents(
 
         responses.append(_parse_response_from_upload(estateId, result))
         if not result.needs_type_selection:
-            _store_parsed_upload(estateId, result)
-            stored_any = True
+            _store_parsed_upload(estateId, result, embed_chunks=False)
+            stored_uploads.append(result)
 
-    alerts = await run_deadline_agent(estateId) if stored_any else []
+    _embed_stored_uploads(estateId, stored_uploads)
+
+    alerts = await run_deadline_agent(estateId) if stored_uploads else []
     for response in responses:
         if not response.needsTypeSelection:
             response.alerts = alerts

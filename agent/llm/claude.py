@@ -102,7 +102,7 @@ async def structured_extract(
         tool_name = response_model.__name__
         schema = response_model.model_json_schema()
         schema.pop("title", None)
-        client = get_client()
+        client = get_async_client()
 
         if client is None:
             set_span_attribute(current_span, "fallback_used", True)
@@ -114,7 +114,7 @@ async def structured_extract(
             return response_model.model_validate(fallback)
 
         try:
-            response = client.messages.create(
+            response = await client.messages.create(
                 model=DOCUMENT_MODEL,
                 max_tokens=4096,
                 tools=[{
