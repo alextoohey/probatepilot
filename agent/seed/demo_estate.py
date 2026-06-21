@@ -56,6 +56,7 @@ DEMO_ESTATE = EstateState(
         UploadedDocument(id="doc-seed-will", fileName="Last Will & Testament.pdf", documentType="will"),
         UploadedDocument(id="doc-seed-bank", fileName="Wells Fargo statement, May.pdf", documentType="bank_statement"),
         UploadedDocument(id="doc-seed-deed", fileName="Grant Deed, 1847 Marin Ave.pdf", documentType="deed"),
+        UploadedDocument(id="doc-seed-letters", fileName="Letters Testamentary.pdf", documentType="letters_testamentary"),
     ],
     tasks=[
         Task(id="task-file-petition", title="File probate petition", status="done", phase=1),

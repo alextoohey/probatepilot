@@ -15,7 +15,7 @@ load_dotenv(".env")  # must run before any module that reads env vars at import 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import Response, StreamingResponse
 
-from agents.deadline_agent import mark_alert_complete, run_deadline_agent
+from agents.deadline_agent import mark_alert_complete, refresh_deadline_state, run_deadline_agent
 from auth.security import hash_password, new_session_token, verify_password
 from documents.pdf_reader import extract_text
 from documents.router import parse_document_text_with_type as parse_document_text
@@ -263,10 +263,11 @@ async def research_agent(request: ResearchAgentRequest) -> ResearchAgentResponse
 async def complete_alert(request: CompleteAlertRequest) -> EstateResponse:
     with span("route.complete_alert", estate_id=request.estateId, action_type="complete_alert", alert_id=request.alertId):
         try:
-            estate = mark_alert_complete(request.estateId, request.alertId)
+            mark_alert_complete(request.estateId, request.alertId)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        return EstateResponse(estate=estate)
+        refresh_deadline_state(request.estateId)
+        return EstateResponse(estate=get_estate_state(request.estateId))
 
 
 ACCEPTED_CONTENT_TYPES = {
