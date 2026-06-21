@@ -17,12 +17,12 @@ from agents.deadline_agent import run_deadline_agent
 from auth.security import hash_password, new_session_token, verify_password
 from documents.pdf_reader import extract_text
 from documents.router import parse_document_text
-from llm.claude import DocumentParseError, generate_letter_draft, stream_chat
+from llm.claude import DocumentParseError, generate_letter_draft, stream_chat, suggest_followups
 from llm.embeddings import embed_query, embed_texts
 from observability.arize import get_tracing_status, init_tracing, set_span_attribute, set_span_error, span
 from prompts.letters import build_letter_fallback, build_letter_prompt, normalize_letter_type
 from prompts.system import build_chat_prompt
-from schemas.api import AnyDocumentExtraction, ChatHistoryResponse, ChatRequest, DeadlineAgentRequest, GenerateLetterRequest, ParseDocumentResponse
+from schemas.api import AnyDocumentExtraction, ChatHistoryResponse, ChatRequest, ChatSuggestionsRequest, ChatSuggestionsResponse, DeadlineAgentRequest, GenerateLetterRequest, ParseDocumentResponse
 from schemas.auth import AuthResponse, LoginRequest, MeResponse, PublicUser, RegisterRequest, User
 from schemas.documents import BankStatementExtraction, DeedExtraction, WillExtraction
 from schemas.estate import Asset, EstateState, Executor, UploadedDocument, utc_now_iso
@@ -415,6 +415,39 @@ async def chat_history(estate_id: str) -> ChatHistoryResponse:
     with span("route.chat_history", estate_id=estate_id, action_type="chat_history"):
         messages = get_chat_history(estate_id)
         return ChatHistoryResponse(estateId=estate_id, messages=messages)
+
+
+def _suggestion_fallback(estate: EstateState) -> list[str]:
+    """Deterministic next-question suggestions when Claude is unavailable."""
+    out: list[str] = []
+    if estate.alerts:
+        out.append("What's the most urgent deadline?")
+    if estate.debts:
+        out.append("How much does the estate owe?")
+        unnotified = next((d for d in estate.debts if not d.notified), None)
+        if unnotified:
+            out.append(f"Do I need to notify {unnotified.creditor}?")
+    if estate.assets:
+        out.append("What is the estate worth right now?")
+    out.append("What should I do next?")
+    # De-dupe while preserving order.
+    return list(dict.fromkeys(out))
+
+
+@app.post("/chat-suggestions")
+async def chat_suggestions(request: ChatSuggestionsRequest) -> ChatSuggestionsResponse:
+    with span("route.chat_suggestions", estate_id=request.estateId, action_type="chat_suggestions"):
+        estate_state = get_estate_state(request.estateId)
+        history = [
+            {"role": m.get("role", ""), "content": m.get("content", "")}
+            for m in get_chat_history(request.estateId)
+        ]
+        suggestions = await suggest_followups(
+            estate_state.model_dump_json(),
+            history,
+            _suggestion_fallback(estate_state),
+        )
+        return ChatSuggestionsResponse(estateId=request.estateId, suggestions=suggestions[:3])
 
 
 @app.post("/generate-letter")

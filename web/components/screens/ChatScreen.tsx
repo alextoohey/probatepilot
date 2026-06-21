@@ -7,7 +7,7 @@ import { ExecutorIcons } from "@/lib/design/icons";
 import { Avatar, Button } from "@/components/ds";
 import { Markdown } from "@/components/Markdown";
 import type { EstateProfile } from "@/lib/design/data";
-import { getChatHistory, getEstate, openChatStream } from "@/lib/agentClient";
+import { getChatHistory, getChatSuggestions, getEstate, openChatStream } from "@/lib/agentClient";
 import type { EstateState } from "@/types";
 
 const I = ExecutorIcons;
@@ -33,7 +33,7 @@ function buildSuggestions(estate: EstateState): string[] {
   if (estate.beneficiaries?.length) out.push("Who inherits what under the will?");
   out.push("What should I do next?");
   const unique = Array.from(new Set(out));
-  return (unique.length ? unique : DEFAULT_SUGGESTIONS).slice(0, 4);
+  return (unique.length ? unique : DEFAULT_SUGGESTIONS).slice(0, 3);
 }
 
 function firstName(full: string): string {
@@ -95,6 +95,17 @@ export function ChatScreen({ estate }: Props) {
     if (endRef.current && endRef.current.parentNode) (endRef.current.parentNode as HTMLElement).scrollTop = endRef.current.offsetTop;
   }, [msgs]);
 
+  // Pull fresh follow-up suggestions (grounded in the conversation so far). Called
+  // after each exchange so the chips reflect what was just discussed.
+  async function refreshSuggestions() {
+    try {
+      const next = await getChatSuggestions(estate.id);
+      if (next.length) setSuggestions(next.slice(0, 3));
+    } catch {
+      /* keep the existing suggestions if the refresh fails */
+    }
+  }
+
   async function send(text?: string, viaVoice = false) {
     const t = (text ?? draft).trim();
     if (!t || busy) return;
@@ -125,6 +136,9 @@ export function ChatScreen({ estate }: Props) {
         }
       }
       if (viaVoice && full.trim()) void speak(full);
+      // The exchange is now persisted server-side; regenerate the suggested
+      // next questions from the updated conversation.
+      void refreshSuggestions();
     } catch {
       setMsgs((m) => {
         const copy = [...m];

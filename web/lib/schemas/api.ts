@@ -57,6 +57,11 @@ export const chatHistoryResponseSchema = z.object({
   messages: z.array(chatMessageSchema),
 }).strict();
 
+export const chatSuggestionsResponseSchema = z.object({
+  estateId: z.string(),
+  suggestions: z.array(z.string()),
+}).strict();
+
 export const estateResponseSchema = z.object({
   estate: estateStateSchema,
 }).strict();

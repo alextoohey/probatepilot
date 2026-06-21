@@ -44,6 +44,11 @@ export interface ChatHistoryResponse {
   messages: ChatMessage[];
 }
 
+export interface ChatSuggestionsResponse {
+  estateId: string;
+  suggestions: string[];
+}
+
 export interface GenerateLetterRequest {
   estateId: string;
   letterType: string;
