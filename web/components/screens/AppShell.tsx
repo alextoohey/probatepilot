@@ -52,6 +52,9 @@ function toEstateProfile(estate: EstateState, user: PublicUser): EstateProfile {
     // The seeded demo estate drives the rich cosmetic screens; real estates
     // start empty until documents are parsed.
     seeded: estate.id === "demo-milligan",
+    // Chat and letters unlock once the estate actually has a document on file
+    // (the demo always does).
+    hasDocuments: estate.id === "demo-milligan" || estate.documents.length > 0,
   };
 }
 
@@ -162,6 +165,22 @@ export function AppShell() {
     setDetailId(null);
     setRoute("dashboard");
   }
+  // After a document is parsed, re-fetch the estate so chat/letters unlock
+  // (hasDocuments flips once the backend has a document on file).
+  async function refreshEstate(id: string) {
+    try {
+      const estate = await getEstate(id);
+      setEstates((cur) =>
+        cur.map((e) =>
+          e.id === id
+            ? { ...e, phase: estate.phase, hasDocuments: e.id === "demo-milligan" || estate.documents.length > 0 }
+            : e,
+        ),
+      );
+    } catch {
+      /* leave the current profile in place if the refresh fails */
+    }
+  }
   function createEstate(est: EstateProfile) {
     setEstates((c) => [...c, est]);
     setActiveEstateId(est.id);
@@ -203,8 +222,8 @@ export function AppShell() {
   } else {
     crumb = titles[route];
     if (route === "dashboard")
-      body = <DashboardScreen key={active.id} estate={active} completedIds={completedIds} onOpenStep={openStep} onGoDocuments={() => navigate("documents")} liveAlerts={liveAlerts} liveEstate={liveEstate} liveAlertsFailed={liveAlertsFailed} />;
-    else if (route === "documents") body = <UploadScreen key={active.id} estate={active} />;
+      body = <DashboardScreen key={active.id} estate={active} completedIds={completedIds} onOpenStep={openStep} onGoDocuments={() => navigate("documents")} liveAlerts={liveAlerts} liveEstate={liveEstate} />;
+    else if (route === "documents") body = <UploadScreen key={active.id} estate={active} onDocumentsChanged={() => refreshEstate(active.id)} />;
     else if (route === "chat") body = <ChatScreen key={active.id} estate={active} />;
     else if (route === "letters") body = <LettersScreen key={active.id} estate={active} />;
     else body = <DashboardScreen key={active.id} estate={active} completedIds={completedIds} onOpenStep={openStep} onGoDocuments={() => navigate("documents")} />;
