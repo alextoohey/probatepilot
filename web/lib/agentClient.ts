@@ -1,6 +1,10 @@
 import {
+  chatHistoryResponseSchema,
+  chatSuggestionsResponseSchema,
   chatRequestSchema,
   completeAlertRequestSchema,
+  chatSessionResponseSchema,
+  chatSessionsResponseSchema,
   deadlineAgentRequestSchema,
   deadlineAgentResponseSchema,
   estateResponseSchema,
@@ -13,7 +17,9 @@ import { meResponseSchema, publicUserSchema } from "./schemas/auth";
 import { z } from "zod";
 import type {
   Alert,
+  ChatMessage,
   ChatRequest,
+  ChatSession,
   EstateState,
   GenerateLetterResponse,
   LoginRequest,
@@ -138,6 +144,40 @@ export async function parseDocument(
   }
   const payload = await response.json();
   return parseDocumentResponseSchema.parse(payload);
+}
+
+export async function getChatHistory(estateId = DEFAULT_ESTATE_ID, sessionId?: string | null, signal?: AbortSignal): Promise<ChatMessage[]> {
+  const query = sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : "";
+  const response = await fetch(`/api/agent/chat-history/${encodeURIComponent(estateId)}${query}`, { signal });
+  if (!response.ok) return [];
+  const payload = await response.json();
+  return chatHistoryResponseSchema.parse(payload).messages;
+}
+
+export async function getChatSuggestions(estateId = DEFAULT_ESTATE_ID, signal?: AbortSignal): Promise<string[]> {
+  const response = await fetch("/api/agent/chat-suggestions", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ estateId }),
+    signal,
+  });
+  if (!response.ok) return [];
+  const payload = await response.json();
+  return chatSuggestionsResponseSchema.parse(payload).suggestions;
+}
+
+export async function getChatSessions(estateId = DEFAULT_ESTATE_ID, signal?: AbortSignal): Promise<ChatSession[]> {
+  const response = await fetch(`/api/agent/chat-sessions/${encodeURIComponent(estateId)}`, { signal });
+  if (!response.ok) return [];
+  const payload = await response.json();
+  return chatSessionsResponseSchema.parse(payload).sessions;
+}
+
+export async function createChatSession(estateId = DEFAULT_ESTATE_ID): Promise<{ session: ChatSession; messages: ChatMessage[] }> {
+  const response = await fetch(`/api/agent/chat-sessions/${encodeURIComponent(estateId)}`, { method: "POST" });
+  const payload = await response.json();
+  const parsed = chatSessionResponseSchema.parse(payload);
+  return { session: parsed.session, messages: parsed.messages };
 }
 
 export async function openChatStream(request: ChatRequest): Promise<ReadableStream<Uint8Array> | null> {
