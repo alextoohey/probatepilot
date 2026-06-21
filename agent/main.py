@@ -44,10 +44,11 @@ from schemas.api import (
     ParseDocumentFailure,
     ParseDocumentResponse,
     ParseDocumentsResponse,
+    SaveLetterRequest,
 )
 from schemas.auth import AuthResponse, LoginRequest, MeResponse, PublicUser, RegisterRequest, User
-from schemas.documents import BankStatementExtraction, DeedExtraction, WillExtraction
-from schemas.estate import Alert, Asset, EstateState, Executor, UploadedDocument, utc_now_iso
+from schemas.documents import BankStatementExtraction, CreditorNoticeExtraction, DeedExtraction, WillExtraction
+from schemas.estate import Alert, Asset, EstateState, Executor, SavedLetter, UploadedDocument, utc_now_iso
 from store.redis_client import (
     add_document,
     append_chat_session_messages,
@@ -122,6 +123,7 @@ def _create_estate_for_user(user: User, request: RegisterRequest) -> EstateState
         dateOfDeath=request.dateOfDeath or date.today().isoformat(),
         appointmentDate=date.today().isoformat(),
         executor=Executor(name=user.name, email=user.email),
+        county=user.county,
         phase=1,
     )
     return set_estate_state(estate)
@@ -305,6 +307,16 @@ def _merge_extraction(estate_id: str, extraction: AnyDocumentExtraction) -> None
                 description=description,
                 estimatedValue=extraction.balance,
             )]
+
+    elif isinstance(extraction, CreditorNoticeExtraction):
+        existing_debts = estate.debts if estate else []
+        existing_creditors = {d.creditor.lower().strip() for d in existing_debts}
+        new_debts = [
+            d for d in extraction.debts
+            if d.creditor.lower().strip() not in existing_creditors
+        ]
+        if new_debts:
+            partial["debts"] = new_debts
 
     elif isinstance(extraction, DeedExtraction) and extraction.propertyAddress:
         addr_key = extraction.propertyAddress.lower()[:30]
@@ -682,3 +694,15 @@ async def generate_letter(request: GenerateLetterRequest) -> dict[str, object]:
             estate_id=request.estateId,
         )
         return {"estateId": request.estateId, "letterType": letter_type, "draft": draft}
+
+
+@app.post("/save-letter")
+async def save_letter(request: SaveLetterRequest) -> dict[str, object]:
+    letter = SavedLetter(
+        id=f"letter-{uuid.uuid4().hex[:8]}",
+        letterType=request.letterType,
+        recipientName=request.recipientName,
+        draft=request.draft,
+    )
+    merge_estate_state(request.estateId, {"letters": [letter.model_dump()]})
+    return {"estateId": request.estateId, "letter": letter}
