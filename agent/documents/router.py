@@ -5,7 +5,7 @@ import logging
 import os
 import re
 
-from llm.claude import DOCUMENT_MODEL, get_async_client, get_client
+from llm.claude import DOCUMENT_MODEL, get_async_client
 from observability.phoenix import set_span_attribute, span
 from prompts.extraction import TYPE_DETECTION_PROMPT
 from schemas.documents import DocumentExtraction, UnknownDocumentExtraction
@@ -14,7 +14,6 @@ from .bank_statement import parse_bank_statement
 from .creditor_notice import parse_creditor_notice
 from .deed import parse_deed
 from .will import parse_will
-
 
 LOGGER = logging.getLogger(__name__)
 
@@ -93,24 +92,6 @@ async def parse_document_text_with_type(
         return extraction, document_type
 
 
-def resolve_document_type(text: str, filename: str = "") -> str:
-    """Best-effort document type from content and the filename.
-
-    Content detection wins for the structured types we can parse; otherwise we fall
-    back to fuzzy filename matching. Non-parseable checklist labels must match the
-    file name or be selected by the user, so unrelated notices are not silently filed.
-    """
-    primary = _detect_type(text)
-    if primary in PARSEABLE_TYPES:
-        return primary
-
-    by_name = detect_type_from_filename(filename)
-    if by_name:
-        return by_name
-
-    return "unknown"
-
-
 async def resolve_document_type_async(text: str, filename: str = "") -> str:
     """Async resolver used by upload routes so Claude detection can run in parallel."""
     primary = _keyword_detect(text)
@@ -164,35 +145,6 @@ def _token_similarity(alias: str, words: list[str]) -> float:
     for alias_word in alias_words:
         total += max(difflib.SequenceMatcher(None, alias_word, word).ratio() for word in words)
     return total / len(alias_words)
-
-
-def _detect_type(text: str) -> str:
-    sample = text[:1500].strip()
-    if not sample:
-        return "unknown"
-    if not os.getenv("ANTHROPIC_API_KEY"):
-        return _keyword_detect(text)
-
-    client = get_client()
-    if client is None:
-        return _keyword_detect(text)
-
-    try:
-        response = client.messages.create(
-            model=DOCUMENT_MODEL,
-            max_tokens=16,
-            messages=[{
-                "role": "user",
-                "content": f"{TYPE_DETECTION_PROMPT}\n\nDOCUMENT BEGINNING:\n{sample}",
-            }],
-        )
-        label = response.content[0].text.strip().lower()
-        if label in PARSEABLE_TYPES:
-            return label
-        return "unknown"
-    except Exception:
-        LOGGER.exception("Claude document type detection failed; using keyword fallback.")
-        return _keyword_detect(text)
 
 
 async def _detect_type_async(text: str) -> str:

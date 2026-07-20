@@ -3,8 +3,8 @@ from __future__ import annotations
 from datetime import date
 
 from rules.california_probate import evaluate_rules
+from schemas.estate import Debt
 from seed.demo_estate import build_demo_estate
-
 
 DEMO_TODAY = date(2026, 6, 20)
 
@@ -38,6 +38,30 @@ def test_missing_or_invalid_required_data_returns_alerts_without_crashing() -> N
     assert any(alert.id == "alert-de-160-missing-appointmentdate" for alert in alerts)
     assert any(alert.id == "alert-creditor-notice-missing-appointmentdate" for alert in alerts)
     assert all(alert.title for alert in alerts)
+
+
+def test_debt_order_flags_unsecured_notice_ahead_of_secured() -> None:
+    out_of_order = build_demo_estate().model_copy(update={
+        "debts": [
+            Debt(id="debt-visa", creditor="Chase Visa", amount=3100, type="unsecured", notified=True),
+            Debt(id="debt-mortgage", creditor="First Republic Mortgage", amount=141000, type="secured", notified=False),
+        ],
+    })
+    correct_order = out_of_order.model_copy(update={
+        "debts": [
+            Debt(id="debt-visa", creditor="Chase Visa", amount=3100, type="unsecured", notified=False),
+            Debt(id="debt-mortgage", creditor="First Republic Mortgage", amount=141000, type="secured", notified=True),
+        ],
+    })
+
+    out_of_order_alerts = {alert.id: alert for alert in evaluate_rules(out_of_order, today=DEMO_TODAY)}
+    assert "alert-debt-order" in out_of_order_alerts
+    violation = out_of_order_alerts["alert-debt-order"]
+    assert violation.severity == "critical"
+    assert violation.type == "rule_violation"
+    assert "First Republic Mortgage" in violation.body
+
+    assert "alert-debt-order" not in {alert.id for alert in evaluate_rules(correct_order, today=DEMO_TODAY)}
 
 
 def test_alert_output_is_stable_across_repeated_calls() -> None:

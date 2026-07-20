@@ -20,18 +20,21 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from constants import DEFAULT_ESTATE_ID
 from schemas.api import SearchResult
 from schemas.auth import User
 from schemas.estate import Alert, EstateState, Executor, SavedLetter, UploadedDocument, utc_now_iso
 from seed.demo_estate import build_demo_estate
 from store.backends.kv import MemoryKVStore, RedisCloudKVStore, UpstashKVStore
 from store.backends.memory_vectors import MemoryVectorStore
-from store.backends.redis_cloud_vectors import (
-    RedisCloudVectorStore,
-    _ensure_redis_cloud_vector_dimension,  # re-exported: tests exercise this directly
-    _parse_redis_cloud_vector_matches,  # re-exported: tests exercise this directly
-    vector_set_key,  # re-exported: tests exercise this directly
-)
+from store.backends.redis_cloud_vectors import RedisCloudVectorStore
+
+# Re-exported below (via `as`) purely so tests can exercise the redis_cloud
+# parsing helpers directly as store.redis_client.X, matching this module's
+# pre-refactor public surface; nothing in this file calls them itself.
+from store.backends.redis_cloud_vectors import _ensure_redis_cloud_vector_dimension as _ensure_redis_cloud_vector_dimension
+from store.backends.redis_cloud_vectors import _parse_redis_cloud_vector_matches as _parse_redis_cloud_vector_matches
+from store.backends.redis_cloud_vectors import vector_set_key as vector_set_key
 from store.backends.upstash_vectors import UpstashVectorStore, chunk_id
 
 __all__ = [
@@ -76,7 +79,6 @@ ESTATE_KEY_PREFIX = "estate:"
 USER_KEY_PREFIX = "user:"
 USER_EMAIL_KEY_PREFIX = "user_email:"
 SESSION_KEY_PREFIX = "session:"
-DEFAULT_ESTATE_ID = "demo-milligan"
 SESSION_TTL_SECONDS = 60 * 60 * 24 * 30  # 30 days
 MAX_CHAT_MESSAGES = 200
 
@@ -445,10 +447,10 @@ def delete_letter(estate_id: str, letter_id: str) -> SavedLetter | None:
         estate = get_estate_state(estate_id)
     except KeyError:
         return None
-    letter = next((l for l in estate.letters if l.id == letter_id), None)
+    letter = next((item for item in estate.letters if item.id == letter_id), None)
     if letter is None:
         return None
-    estate.letters = [l for l in estate.letters if l.id != letter_id]
+    estate.letters = [item for item in estate.letters if item.id != letter_id]
     set_estate_state(estate)
     return letter
 

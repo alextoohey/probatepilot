@@ -2,16 +2,15 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-from datetime import datetime, timedelta, timezone
 import os
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pandas as pd
 from dotenv import load_dotenv
 from phoenix.client import Client
-from phoenix.evals import ClassificationEvaluator, LLM, async_evaluate_dataframe
+from phoenix.evals import LLM, ClassificationEvaluator, async_evaluate_dataframe
 from phoenix.evals.utils import to_annotation_dataframe
-
 
 EVALUATOR_NAME = "deadline_next_steps_quality"
 DEADLINE_SPAN_NAME = "deadline_agent.run"
@@ -153,7 +152,7 @@ async def run(args: argparse.Namespace) -> int:
     client = Client(base_url=base_url, api_key=api_key)
     start_time = None
     if args.hours is not None:
-        start_time = datetime.now(timezone.utc) - timedelta(hours=args.hours)
+        start_time = datetime.now(UTC) - timedelta(hours=args.hours)
     spans = client.spans.get_spans_dataframe(
         project_identifier=project,
         start_time=start_time,

@@ -1,21 +1,19 @@
 from __future__ import annotations
 
-from dataclasses import asdict
-from datetime import date
-from email.mime import text
 import json
 import logging
 import os
 import re
+from dataclasses import asdict
 from typing import Any
+
+from pydantic import ValidationError
 
 from llm.claude import REASONING_MODEL, create_reasoning_message
 from observability.phoenix import set_span_attribute, set_span_error, span
-from pydantic import ValidationError
 from rules.california_probate import CALIFORNIA_PROBATE_RULES, RULES_BY_ID, alert_sort_key, derive_alert_timing_status, evaluate_rules
 from schemas.estate import Alert, EstateState, Task
-from store.redis_client import get_estate_state, set_estate_state
-
+from store.redis_client import DEFAULT_ESTATE_ID, get_estate_state, set_estate_state
 
 LOGGER = logging.getLogger(__name__)
 REQUIRED_DEMO_ALERT_IDS = {"alert-creditor-notice", "alert-de-160-inventory"}
@@ -86,7 +84,7 @@ DEADLINE_ALERT_SUBMISSION_TOOL: dict[str, Any] = {
 }
 
 
-async def run_deadline_agent(estate_id: str = "demo-milligan") -> list[Alert]:
+async def run_deadline_agent(estate_id: str = DEFAULT_ESTATE_ID) -> list[Alert]:
     """Run Claude DeadlineAgent with deterministic rule fallback."""
     estate = get_estate_state(estate_id)
     deterministic_alerts = rank_alerts(evaluate_rules(estate))
@@ -156,7 +154,7 @@ async def run_deadline_agent(estate_id: str = "demo-milligan") -> list[Alert]:
         return final_alerts
 
 
-def refresh_deadline_state(estate_id: str = "demo-milligan") -> list[Alert]:
+def refresh_deadline_state(estate_id: str = DEFAULT_ESTATE_ID) -> list[Alert]:
     """Refresh deterministic alerts and tasks without waiting for Claude."""
     estate = get_estate_state(estate_id)
     return _persist_deadline_state(estate, evaluate_rules(estate))
@@ -242,8 +240,7 @@ async def _run_claude_tool_loop(estate: EstateState, deterministic_alerts: list[
                 raise ClaudeToolUseRequiredError("Claude returned final alerts before using any tools.")
             text = _message_text(blocks)
 
-            LOGGER.debug("CLAUDE FINAL BLOCKS: %s", json.dumps(blocks, indent=2, default=str))
-            LOGGER.debug("CLAUDE FINAL TEXT: %r", text)
+            LOGGER.debug("Claude final response: %d blocks, %d chars of text", len(blocks), len(text))
 
             try:
                 parsed_alerts = _parse_alerts_from_text(text)
@@ -475,6 +472,9 @@ def _parse_alerts_from_text(text: str) -> list[Alert]:
 
 
 def _extract_json(text: str) -> str:
+    """Thin wrapper over `_json_candidates` for the first match. Production
+    code calls `_json_candidates` directly to try every candidate in order;
+    this exists as a convenience entry point for tests."""
     for candidate in _json_candidates(text):
         return candidate
     raise ValueError("Claude response did not contain JSON.")

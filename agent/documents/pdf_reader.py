@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import base64
 import io
+import logging
 
 import pdfplumber
+
+LOGGER = logging.getLogger(__name__)
 
 MIN_TEXT_CHARS = 150
 HEIC_CONTENT_TYPES = {"image/heic", "image/heif"}
@@ -39,12 +42,12 @@ def _pdfplumber(content: bytes) -> str:
             pages = [page.extract_text() or "" for page in pdf.pages]
         return "\n\n".join(pages)
     except Exception as exc:
-        print(f"[pdf_reader] pdfplumber failed: {exc}")
+        LOGGER.warning("pdfplumber failed to extract text: %s", exc)
         return ""
 
 
 def _claude_vision_pdf(content: bytes) -> str:
-    from llm.claude import get_client, DOCUMENT_MODEL
+    from llm.claude import DOCUMENT_MODEL, get_client
 
     pdf_b64 = base64.standard_b64encode(content).decode()
     try:
@@ -75,12 +78,12 @@ def _claude_vision_pdf(content: bytes) -> str:
         )
         return response.content[0].text
     except Exception as exc:
-        print(f"[pdf_reader] Claude Vision PDF failed: {exc}")
+        LOGGER.warning("Claude Vision PDF transcription failed: %s", exc)
         return ""
 
 
 def _from_image(content: bytes, content_type: str) -> str:
-    from llm.claude import get_client, DOCUMENT_MODEL
+    from llm.claude import DOCUMENT_MODEL, get_client
 
     img_b64 = base64.standard_b64encode(content).decode()
     try:
@@ -111,7 +114,7 @@ def _from_image(content: bytes, content_type: str) -> str:
         )
         return response.content[0].text
     except Exception as exc:
-        print(f"[pdf_reader] Claude Vision image failed: {exc}")
+        LOGGER.warning("Claude Vision image transcription failed: %s", exc)
         return ""
 
 
@@ -126,5 +129,5 @@ def _heic_to_jpeg(content: bytes) -> tuple[bytes, str]:
             image.convert("RGB").save(converted, format="JPEG", quality=94)
             return converted.getvalue(), "image/jpeg"
     except Exception as exc:
-        print(f"[pdf_reader] HEIC/HEIF conversion failed: {exc}")
+        LOGGER.warning("HEIC/HEIF conversion failed: %s", exc)
         return content, "image/jpeg"

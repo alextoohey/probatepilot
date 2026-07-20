@@ -14,8 +14,6 @@ from store.redis_client import (
     create_user,
     delete_session,
     get_estate_state,
-    get_session_user_id,
-    get_user,
     get_user_by_email,
     set_estate_state,
     update_user,

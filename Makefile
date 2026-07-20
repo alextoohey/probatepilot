@@ -48,8 +48,9 @@ health:  ## Check the agent is up
 
 test: test-agent test-web-contracts  ## Run Python and TypeScript contract tests
 
-test-agent:  ## Run Member 1/2 Python and integration tests
+test-agent:  ## Run all Python tests (contracts + document intelligence + agent/rules)
 	cd agent && STORE_BACKEND=memory uv run pytest ../tests/member1 ../tests/member2 ../tests/integration
+	cd agent && STORE_BACKEND=memory uv run pytest tests
 
 test-web-contracts:  ## Run TypeScript/Zod contract tests
 	cd web && npm run test:contracts
@@ -57,8 +58,11 @@ test-web-contracts:  ## Run TypeScript/Zod contract tests
 typecheck:  ## TypeScript typecheck (web)
 	cd web && npm run typecheck
 
-lint:  ## Lint web TypeScript
+lint: lint-agent  ## Lint web TypeScript and Python agent
 	cd web && npm run lint
+
+lint-agent:  ## Lint the Python agent with ruff
+	cd agent && uv run ruff check .
 
 # ── Help ──────────────────────────────────────────────────────────────────────
 

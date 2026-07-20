@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 import main
+from api.routers import letters as letters_router
 from prompts.letters import build_letter_fallback, build_letter_prompt
 from seed.demo_estate import build_demo_estate
 from store.redis_client import seed_demo_estate
@@ -65,7 +66,7 @@ def test_letter_prompt_includes_estate_facts_and_letter_type() -> None:
 
     prompt = build_letter_prompt(estate, "bank_notification", "Wells Fargo")
 
-    assert "Letter type: bank_notification" in prompt
+    assert "estate bank notification addressed specifically to: Wells Fargo" in prompt
     assert "Robert A. Milligan" in prompt
     assert "2026-06-03" in prompt
     assert "Dana Milligan" in prompt
@@ -88,7 +89,7 @@ def test_generate_letter_route_uses_claude_helper_when_configured(monkeypatch) -
         return "Claude drafted letter"
 
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
-    monkeypatch.setattr(main, "generate_letter_draft", fake_generate_letter_draft)
+    monkeypatch.setattr(letters_router, "generate_letter_draft", fake_generate_letter_draft)
     seed_demo_estate()
     client = TestClient(main.app)
 

@@ -4,6 +4,8 @@ from typing import Any
 
 from pydantic import Field
 
+from constants import DEFAULT_ESTATE_ID
+
 from .documents import BankStatementExtraction, CreditorNoticeExtraction, DeedExtraction, UnknownDocumentExtraction, WillExtraction
 from .estate import Alert, ContractModel, EstateState, SavedLetter
 
@@ -47,11 +49,11 @@ class ParseDocumentsResponse(ContractModel):
 
 
 class DeadlineAgentRequest(ContractModel):
-    estateId: str = "demo-milligan"
+    estateId: str = DEFAULT_ESTATE_ID
 
 
 class ResearchAgentRequest(ContractModel):
-    estateId: str = "demo-milligan"
+    estateId: str = DEFAULT_ESTATE_ID
     force: bool = False
 
 
@@ -61,12 +63,12 @@ class ResearchAgentResponse(ContractModel):
 
 
 class CompleteAlertRequest(ContractModel):
-    estateId: str = "demo-milligan"
+    estateId: str = DEFAULT_ESTATE_ID
     alertId: str
 
 
 class ChatRequest(ContractModel):
-    estateId: str = "demo-milligan"
+    estateId: str = DEFAULT_ESTATE_ID
     message: str
     topK: int = 5
     sessionId: str | None = None
@@ -105,7 +107,7 @@ class ChatSessionResponse(ContractModel):
 
 
 class NotifyEmailRequest(ContractModel):
-    estateId: str = "demo-milligan"
+    estateId: str = DEFAULT_ESTATE_ID
     recipientEmail: str | None = None
     # "alerts" = current open alerts; "weekly" = the Monday recap.
     kind: str = "alerts"
@@ -124,7 +126,7 @@ class NotifyEmailResponse(ContractModel):
 
 
 class ChatSuggestionsRequest(ContractModel):
-    estateId: str = "demo-milligan"
+    estateId: str = DEFAULT_ESTATE_ID
 
 
 class ChatSuggestionsResponse(ContractModel):
@@ -133,7 +135,7 @@ class ChatSuggestionsResponse(ContractModel):
 
 
 class GenerateLetterRequest(ContractModel):
-    estateId: str = "demo-milligan"
+    estateId: str = DEFAULT_ESTATE_ID
     letterType: str = "creditor_notice"
     recipientName: str | None = None
     # Free-text description for a custom letter (letterType == "custom").

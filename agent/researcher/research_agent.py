@@ -6,20 +6,21 @@ import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 from collections.abc import Callable, Iterable
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 
-from observability.phoenix import set_span_attribute, span
 from pydantic import Field
+
+from observability.phoenix import set_span_attribute, span
 from schemas.estate import Alert, ContractModel, EstateState
 from store.redis_client import (
+    DEFAULT_ESTATE_ID,
     get_estate_state,
     get_research_run_state,
     list_estate_ids,
     set_estate_state,
     set_research_run_state,
 )
-
 
 LOGGER = logging.getLogger(__name__)
 DEFAULT_WAKE_INTERVAL = timedelta(days=7)
@@ -102,7 +103,7 @@ def should_wake(last_checked_at: str | None, now: datetime | None = None, interv
 
 
 async def run_research_agent(
-    estate_id: str = "demo-milligan",
+    estate_id: str = DEFAULT_ESTATE_ID,
     *,
     now: datetime | None = None,
     force: bool = False,
@@ -323,10 +324,10 @@ def _parse_datetime(value: str | None) -> datetime | None:
 
 def _utc(value: datetime | None) -> datetime:
     if value is None:
-        return datetime.now(timezone.utc)
+        return datetime.now(UTC)
     if value.tzinfo is None:
-        return value.replace(tzinfo=timezone.utc)
-    return value.astimezone(timezone.utc)
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 def _state_label(state: str) -> str:

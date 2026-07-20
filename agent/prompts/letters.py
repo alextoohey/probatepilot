@@ -5,7 +5,6 @@ from typing import Any
 
 from schemas.estate import EstateState
 
-
 SUPPORTED_LETTER_TYPES = {
     "creditor_notice",
     "bank_notification",
@@ -102,7 +101,6 @@ Executor of the Estate of {estate.deceasedName}
 def build_letter_prompt(estate: EstateState, letter_type: str, recipient_name: str | None = None) -> str:
     selected_type = normalize_letter_type(letter_type)
     recipient = recipient_name or _default_recipient(selected_type)
-    estate_json = json.dumps(estate.model_dump(mode="json"), indent=2, sort_keys=True)
     relevant_context = _relevant_context(estate, selected_type, recipient)
     statute_context = _statute_context(selected_type)
 

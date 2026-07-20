@@ -4,9 +4,7 @@ from typing import Literal
 
 from pydantic import Field
 
-from .estate import Asset, Beneficiary, Debt
-from .estate import ContractModel
-
+from .estate import Asset, Beneficiary, ContractModel, Debt
 
 DocumentType = Literal["will", "bank_statement", "deed", "creditor_notice", "unknown"]
 

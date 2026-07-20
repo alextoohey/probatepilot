@@ -4,7 +4,6 @@ from copy import deepcopy
 
 from schemas.estate import Asset, Beneficiary, Debt, EstateState, Executor, Task, UploadedDocument
 
-
 DEMO_ESTATE = EstateState(
     id="demo-milligan",
     deceasedName="Robert A. Milligan",

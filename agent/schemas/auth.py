@@ -38,7 +38,7 @@ class PublicUser(ContractModel):
     createdAt: str
 
     @classmethod
-    def from_user(cls, user: User) -> "PublicUser":
+    def from_user(cls, user: User) -> PublicUser:
         return cls(
             id=user.id,
             name=user.name,

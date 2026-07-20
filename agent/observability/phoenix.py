@@ -3,9 +3,9 @@ from __future__ import annotations
 import json
 import logging
 import os
+from collections.abc import Iterator
 from contextlib import contextmanager
-from typing import Any, Iterator
-
+from typing import Any
 
 LOGGER = logging.getLogger(__name__)
 _INITIALIZED = False

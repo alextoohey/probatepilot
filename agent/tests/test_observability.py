@@ -5,9 +5,10 @@ from contextlib import contextmanager
 
 from fastapi.testclient import TestClient
 
+import main
 from agents import deadline_agent
 from agents.deadline_agent import run_deadline_agent
-import main
+from api.routers import chat as chat_router
 from observability import phoenix
 from store.redis_client import seed_demo_estate
 
@@ -137,7 +138,7 @@ def test_chat_still_streams_when_retrieval_fails(monkeypatch) -> None:
         raise RuntimeError("embedding unavailable")
 
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.setattr(main, "embed_query", failing_embed_query)
+    monkeypatch.setattr(chat_router, "embed_query", failing_embed_query)
     client = TestClient(main.app)
 
     response = client.post(

@@ -1,16 +1,16 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
 import json
 import logging
 import os
 import re
+from collections.abc import AsyncIterator
 from typing import Any, TypeVar
 
 import anthropic
-from observability.phoenix import set_span_attribute, set_span_error, span
 from pydantic import BaseModel
 
+from observability.phoenix import set_span_attribute, set_span_error, span
 
 ModelT = TypeVar("ModelT", bound=BaseModel)
 LOGGER = logging.getLogger(__name__)

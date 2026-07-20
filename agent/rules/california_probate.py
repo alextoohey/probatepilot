@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date
-from typing import Iterable
 
 from dateutil.relativedelta import relativedelta
 
@@ -25,16 +25,26 @@ CALIFORNIA_PROBATE_RULES = [
     ProbateRule("letters-testamentary", "Letters Testamentary", "Court appointment prerequisite", "filedPetition", "After court appointment", "Estate administration requires proof of legal authority"),
     ProbateRule("de-160", "DE-160 Inventory & Appraisal", "CA Probate Code", "appointmentDate", "4 months", "Court sanctions and personal liability"),
     ProbateRule("creditor-notice", "Creditor notification", "CA Probate Code §9051", "appointmentDate", "30 days", "Personal liability for late distributions"),
-    ProbateRule("newspaper-notice", "Newspaper notice to creditors", "CA Probate Code §9052", "firstPublicationDate", "3 weeks", "Notice violation"),
-    ProbateRule("claim-period", "Creditor claim period closes", "CA Probate Code", "firstPublicationDate", "4 months", "Cannot distribute before close"),
     ProbateRule("estate-ein", "Estate EIN", "IRS SS-4", "estateBanking", "ASAP", "Cannot open estate bank account"),
     ProbateRule("estate-bank-account", "Estate bank account", "Operational prerequisite", "legalAuthorityAndEin", "ASAP", "Estate funds should be kept separate from personal funds"),
     ProbateRule("debt-resolution", "Debt resolution", "CA Probate administration", "creditorNotice", "Before distribution", "Unresolved debts can block final distribution"),
     ProbateRule("final-1040", "Final 1040", "IRS", "dateOfDeath", "April 15 following year", "IRS penalties"),
-    ProbateRule("form-1041", "Form 1041", "IRS", "estateIncome", "April 15 following year", "IRS penalties"),
     ProbateRule("debt-order", "Debt payment order", "CA Probate Code", "beforeDistribution", "Sequential", "Out-of-order payments create personal liability"),
     ProbateRule("appraisal-needed", "Property appraisal needed", "CA Probate Code", "beforeDE160", "Before DE-160", "Blocks inventory filing"),
 ]
+
+# Rules that are real CA probate requirements but can't be evaluated
+# deterministically with the fields EstateState currently tracks. Left out of
+# CALIFORNIA_PROBATE_RULES (rather than kept as always-empty entries) so the
+# rule count and the DeadlineAgent's `list_california_probate_rules` tool
+# only ever report rules that can actually fire.
+#
+#   newspaper-notice (CA Probate Code §9052) — needs firstPublicationDate
+#     and a record of each publication run.
+#   claim-period (CA Probate Code) — needs firstPublicationDate plus a
+#     distribution-status flag to gate "don't distribute before this closes".
+#   form-1041 (IRS) — needs estateIncome and the estate's tax year end to
+#     decide the >$600 filing trigger.
 
 
 RULES_BY_ID = {rule.id: rule for rule in CALIFORNIA_PROBATE_RULES}
@@ -56,10 +66,7 @@ def evaluate_rules(estate: EstateState, today: date | None = None) -> list[Alert
         _evaluate_de_160_inventory,
         _evaluate_creditor_notification,
         _evaluate_debt_resolution,
-        _evaluate_newspaper_notice,
-        _evaluate_claim_period,
         _evaluate_final_1040,
-        _evaluate_form_1041,
         _evaluate_debt_payment_order,
         _evaluate_property_appraisal_needed,
     ):
@@ -236,67 +243,6 @@ def _evaluate_creditor_notification(estate: EstateState, today: date) -> list[Al
     ]
 
 
-def _evaluate_newspaper_notice(estate: EstateState, today: date) -> list[Alert]:
-    rule = RULES_BY_ID["newspaper-notice"]
-    # TODO: Add firstPublicationDate/publicationRuns to EstateState so this can verify the 3-week notice directly.
-    if not hasattr(estate, "firstPublicationDate"):
-        return []
-    publication_date = _required_date(estate, "firstPublicationDate", rule, today)
-    if isinstance(publication_date, Alert):
-        return [publication_date]
-
-    due = publication_date + relativedelta(weeks=3)
-    return [
-        _alert(
-            rule=rule,
-            today=today,
-            alert_id="alert-newspaper-notice",
-            severity=_deadline_severity(due, today),
-            alert_type="deadline",
-            timing_status="dated",
-            title="Newspaper creditor notice completion is not recorded",
-            body=(
-                f"Rule newspaper-notice ({rule.title}; {rule.statute}) runs from "
-                f"firstPublicationDate={publication_date.isoformat()} through {due.isoformat()}. "
-                f"Consequence: {rule.consequence}."
-            ),
-            action="Record all required publication runs or upload proof of publication.",
-            days_remaining=(due - today).days,
-        )
-    ]
-
-
-def _evaluate_claim_period(estate: EstateState, today: date) -> list[Alert]:
-    rule = RULES_BY_ID["claim-period"]
-    # TODO: Add firstPublicationDate and distribution status to EstateState to gate distributions deterministically.
-    if not hasattr(estate, "firstPublicationDate"):
-        return []
-    publication_date = _required_date(estate, "firstPublicationDate", rule, today)
-    if isinstance(publication_date, Alert):
-        return [publication_date]
-
-    close_date = publication_date + relativedelta(months=4)
-    if today < close_date:
-        return [
-            _alert(
-                rule=rule,
-                today=today,
-                alert_id="alert-claim-period-open",
-                severity="info",
-                alert_type="deadline",
-                timing_status="dated",
-                title="Creditor claim period is still open",
-                body=(
-                    f"Rule claim-period ({rule.title}) closes {close_date.isoformat()} from "
-                    f"firstPublicationDate={publication_date.isoformat()}. Consequence: {rule.consequence}."
-                ),
-                action="Do not make beneficiary distributions until the creditor claim period closes.",
-                days_remaining=(close_date - today).days,
-            )
-        ]
-    return []
-
-
 def _evaluate_estate_ein(estate: EstateState, today: date) -> list[Alert]:
     rule = RULES_BY_ID["estate-ein"]
     if not _has_legal_authority(estate) or _estate_ein_recorded(estate):
@@ -401,46 +347,47 @@ def _evaluate_final_1040(estate: EstateState, today: date) -> list[Alert]:
     ]
 
 
-def _evaluate_form_1041(estate: EstateState, today: date) -> list[Alert]:
-    rule = RULES_BY_ID["form-1041"]
-    # TODO: Add estateIncome and taxYearClose to EstateState. The current schema cannot decide the >$600 trigger.
-    estate_income = getattr(estate, "estateIncome", None)
-    if estate_income is None:
-        return []
-    if estate_income <= 600 or _has_document(estate, "1041") or _task_done(estate, "1041"):
+def _evaluate_debt_payment_order(estate: EstateState, today: date) -> list[Alert]:
+    """CA probate pays secured creditors before unsecured/priority ones,
+    which come before beneficiary distributions. EstateState has no
+    payment-status field to catch an out-of-order *payment* directly, but
+    Debt.notified is a real, tracked signal — notifying unsecured or
+    priority creditors while a secured creditor still hasn't been notified
+    is the earliest observable sign the order is being violated."""
+    rule = RULES_BY_ID["debt-order"]
+    debts = _debts(estate)
+    unnotified_secured = [d for d in debts if d.type == "secured" and not d.notified]
+    notified_unsecured_or_priority = [d for d in debts if d.type in ("unsecured", "priority") and d.notified]
+    if not unnotified_secured or not notified_unsecured_or_priority or _rule_completed(estate, "alert-debt-order"):
         return []
 
-    death_date = _required_date(estate, "dateOfDeath", rule, today)
-    if isinstance(death_date, Alert):
-        return [death_date]
-    due = date(death_date.year + 1, 4, 15)
+    creditor_list = _join_descriptions(debt.creditor for debt in unnotified_secured)
     return [
         _alert(
             rule=rule,
             today=today,
-            alert_id="alert-form-1041",
-            severity=_deadline_severity(due, today),
-            alert_type="deadline",
-            timing_status="dated",
-            title="Estate Form 1041 is not recorded",
+            alert_id="alert-debt-order",
+            severity="critical",
+            alert_type="rule_violation",
+            timing_status="blocking",
+            title="Creditors are being notified out of payment order",
             body=(
-                f"Rule form-1041 ({rule.title}) is due {due.isoformat()} because estateIncome={estate_income}. "
-                f"Consequence: {rule.consequence}."
+                f"Rule debt-order ({rule.title}) requires secured creditors to be notified and paid before "
+                f"unsecured or priority creditors. Secured creditors not yet notified: {creditor_list}, while "
+                f"at least one unsecured or priority creditor already has been. Consequence: {rule.consequence}."
             ),
-            action="Prepare Form 1041 or record why it is not required.",
-            days_remaining=(due - today).days,
+            action="Pause unsecured or priority creditor payments and notify the remaining secured creditors first.",
+            days_remaining=None,
         )
     ]
 
 
-def _evaluate_debt_payment_order(estate: EstateState, today: date) -> list[Alert]:
-    rule = RULES_BY_ID["debt-order"]
-    # TODO: Add debt payment status and beneficiary distribution records to EstateState.
-    return []
-
-
 def _evaluate_property_appraisal_needed(estate: EstateState, today: date) -> list[Alert]:
-    # Covered by the DE-160 rule until appraisal documents have their own schema state.
+    # Intentionally a no-op: unappraised-asset detection already lives in
+    # _evaluate_de_160_inventory (the only place appraisal status blocks a
+    # deadline). This rule stays listed for the DeadlineAgent's rule catalog
+    # so the model knows appraisal requirements exist, without duplicating
+    # the DE-160 alert.
     return []
 
 

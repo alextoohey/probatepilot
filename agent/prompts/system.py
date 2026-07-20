@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 from typing import Any
 
-
 ATTORNEY_INPUT_SENTENCE = "This requires your attorney's input — it involves [reason]."
 
 BASE_CHAT_SYSTEM_PROMPT = f"""You are an estate administration assistant helping an executor manage a California estate.

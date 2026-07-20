@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 
 from researcher.research_agent import NewsItem, build_research_queries, run_research_agent, should_wake
 from seed.demo_estate import build_demo_estate
@@ -20,7 +20,7 @@ def test_build_research_queries_include_state_and_county() -> None:
 
 
 def test_should_wake_after_weekly_interval() -> None:
-    now = datetime(2026, 6, 21, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 21, tzinfo=UTC)
 
     assert should_wake(None, now)
     assert not should_wake((now - timedelta(days=6, hours=23)).isoformat(), now)
@@ -31,7 +31,7 @@ def test_research_agent_skips_when_estate_checked_this_week(monkeypatch) -> None
     monkeypatch.setenv("STORE_BACKEND", "memory")
     estate = build_demo_estate()
     set_estate_state(estate)
-    now = datetime(2026, 6, 21, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 21, tzinfo=UTC)
     set_research_run_state(estate.id, {"lastCheckedAt": (now - timedelta(days=1)).isoformat()})
 
     result = asyncio.run(run_research_agent(estate.id, now=now, fetch_news=lambda _queries, _estate: []))
@@ -45,7 +45,7 @@ def test_research_agent_creates_attorney_review_alert(monkeypatch) -> None:
     estate = build_demo_estate()
     set_estate_state(estate)
     set_research_run_state(estate.id, {})
-    now = datetime(2026, 6, 21, tzinfo=timezone.utc)
+    now = datetime(2026, 6, 21, tzinfo=UTC)
 
     def fake_news(_queries, _estate):
         return [

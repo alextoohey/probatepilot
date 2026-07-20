@@ -7,8 +7,8 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from agents.deadline_agent import run_deadline_agent
 from api.deps import require_estate_access, require_user
-from schemas.auth import CreateEstateRequest, User
 from schemas.api import EstateResponse
+from schemas.auth import CreateEstateRequest, User
 from schemas.estate import EstateState, Executor
 from store.redis_client import get_estate_state, seed_demo_estate, set_estate_state, update_user
 

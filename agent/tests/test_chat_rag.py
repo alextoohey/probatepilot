@@ -5,6 +5,7 @@ import asyncio
 from fastapi.testclient import TestClient
 
 import main
+from api.routers import chat as chat_router
 from llm.claude import stream_chat
 from prompts.system import ATTORNEY_INPUT_SENTENCE, build_chat_prompt
 from seed.demo_estate import build_demo_estate
@@ -64,7 +65,7 @@ def test_chat_sse_streams_with_retrieval_failure(monkeypatch) -> None:
         raise RuntimeError("embedding unavailable")
 
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.setattr(main, "embed_query", failing_embed_query)
+    monkeypatch.setattr(chat_router, "embed_query", failing_embed_query)
     client = TestClient(main.app)
 
     response = client.post(
@@ -84,7 +85,7 @@ def test_chat_sse_persists_exchange_after_stream(monkeypatch) -> None:
         raise RuntimeError("embedding unavailable")
 
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.setattr(main, "embed_query", failing_embed_query)
+    monkeypatch.setattr(chat_router, "embed_query", failing_embed_query)
     client = TestClient(main.app)
 
     response = client.post(
@@ -108,7 +109,7 @@ def test_chat_sessions_keep_past_chats_separate(monkeypatch) -> None:
         raise RuntimeError("embedding unavailable")
 
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
-    monkeypatch.setattr(main, "embed_query", failing_embed_query)
+    monkeypatch.setattr(chat_router, "embed_query", failing_embed_query)
     client = TestClient(main.app)
 
     first = client.post("/chat-sessions/demo-milligan").json()["session"]

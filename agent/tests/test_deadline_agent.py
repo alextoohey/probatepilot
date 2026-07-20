@@ -1,14 +1,21 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import contextmanager
 import json
+from contextlib import contextmanager
 from types import SimpleNamespace
 
 from agents import deadline_agent
-from agents.deadline_agent import _extract_json, _parse_alerts_from_text, handle_deadline_agent_tool, mark_alert_complete, refresh_deadline_state, run_deadline_agent
-from seed.demo_estate import build_demo_estate
+from agents.deadline_agent import (
+    _extract_json,
+    _parse_alerts_from_text,
+    handle_deadline_agent_tool,
+    mark_alert_complete,
+    refresh_deadline_state,
+    run_deadline_agent,
+)
 from schemas.estate import Task
+from seed.demo_estate import build_demo_estate
 from store.redis_client import get_alerts, get_estate_state, seed_demo_estate
 
 
@@ -72,6 +79,7 @@ def test_alert_ranking_puts_critical_alerts_first(monkeypatch) -> None:
 
 def test_deterministic_alerts_assign_timing_status() -> None:
     from datetime import date
+
     from rules.california_probate import evaluate_rules
 
     estate = build_demo_estate()
@@ -340,7 +348,7 @@ def test_completed_task_survives_refresh_and_alert_does_not_reappear(monkeypatch
 
 
 def test_complete_alert_route_does_not_wait_for_claude(monkeypatch) -> None:
-    import main
+    from api.routers import agents as agents_router
     from schemas.api import CompleteAlertRequest
 
     seed_demo_estate()
@@ -349,11 +357,11 @@ def test_complete_alert_route_does_not_wait_for_claude(monkeypatch) -> None:
     async def unexpected_claude_run(*args, **kwargs):
         raise AssertionError("complete-alert must not wait for Claude")
 
-    monkeypatch.setattr(main, "run_deadline_agent", unexpected_claude_run)
-    response = asyncio.run(main.complete_alert(CompleteAlertRequest(
-        estateId="demo-milligan",
-        alertId="alert-creditor-notice",
-    )))
+    monkeypatch.setattr(agents_router, "run_deadline_agent", unexpected_claude_run)
+    response = asyncio.run(agents_router.complete_alert(
+        CompleteAlertRequest(estateId="demo-milligan", alertId="alert-creditor-notice"),
+        user=None,
+    ))
 
     alert_ids = {alert.id for alert in response.estate.alerts}
     assert "alert-creditor-notice" not in alert_ids
@@ -362,6 +370,7 @@ def test_complete_alert_route_does_not_wait_for_claude(monkeypatch) -> None:
 
 def test_deterministic_tasks_unlock_from_stable_completed_ids() -> None:
     from datetime import date
+
     from rules.california_probate import evaluate_rules
 
     estate = build_demo_estate()
