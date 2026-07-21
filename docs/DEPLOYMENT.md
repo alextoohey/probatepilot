@@ -67,6 +67,11 @@ The live app is empty until the demo estate exists. Either:
   every request is proxied through Next.js API routes (`web/app/api/agent/[...path]`),
   which forward the session cookie as a Bearer token server-side. No CORS
   configuration is needed on the agent.
+- **Vercel function timeout**: that same proxy route sets `export const maxDuration = 60`
+  because `POST /deadline-agent`'s Claude-enhanced pass takes ~30-45s, longer than
+  Vercel's serverless default (10s on Hobby). Already handled in the code — nothing to
+  configure — but worth knowing if you ever see that call fail only in production and not
+  locally/on Render, where there's no such limit.
 - **Auth**: every estate-scoped endpoint requires a session and ownership, no exceptions —
   "Try the demo" is automated, not unauthenticated: it mints a real session on a fresh,
   independent copy of the seed estate for that visitor only, so no registration form is
