@@ -7,6 +7,12 @@ root `README.md`:
 - `dashboard.png` — the hero shot: a fresh demo estate with its three CRITICAL alerts.
 - `documents.png` — the upload screen with the parsing checklist.
 - `chat.png` — a real, grounded RAG answer with a markdown table.
+- `phoenix-trace.png` — a real Phoenix trace of a DeadlineAgent `messages.create` call:
+  the exact system prompt sent, the estate JSON input, and per-call cost/token/latency.
+  Captured from a local self-hosted Phoenix instance (`docker run ... arizephoenix/phoenix`,
+  see `agent/README.md#phoenix-tracing`), not Phoenix Cloud — don't point this at a shared
+  or teammate's Phoenix project when retaking it, since it captures real prompt/completion
+  content (`PHOENIX_CAPTURE_LLM_CONTENT=true` locally).
 
 `welcome.jpg` (the marketing landing page) is captured but not currently embedded in the
 README — the dashboard does more work as the lead image. Swap it in if you'd rather open

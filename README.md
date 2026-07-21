@@ -87,6 +87,12 @@ forwards the session as a bearer token server-side, so there's no CORS surface t
   on real traces. Tracing is optional and degrades to a harmless connection warning with
   no collector running — see [`agent/README.md`](agent/README.md#phoenix-tracing) to spin
   one up locally and actually watch the traces.
+
+  <img src="docs/assets/phoenix-trace.png" width="70%" alt="Phoenix trace of a real DeadlineAgent tool-use call: system prompt, model, cost, tokens, and latency" />
+
+  A real trace from a live run: the DeadlineAgent's tool-use loop (left), the exact
+  `claude-sonnet-4-6` system prompt sent, and per-call cost/token/latency ($0.01, 3,977
+  tokens, 2.8s for this step).
 - **The DeadlineAgent's Claude calls use real prompt caching.** Its system prompt and tool
   schemas (~1,066 tokens, reused across up to 5 tool-use rounds per run) carry an Anthropic
   `cache_control` marker and measurably hit cache on repeat calls
