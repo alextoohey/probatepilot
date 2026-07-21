@@ -17,3 +17,8 @@ tests/.compiled/
 # TypeScript incremental build cache — generated, must never be committed
 # (otherwise it produces merge conflicts on every branch merge)
 *.tsbuildinfo
+
+# AI-assistant-facing instructions — kept locally, not published. Anything a
+# human reader needs (architecture, API surface, project layout) lives in
+# docs/ARCHITECTURE.md instead; keep that in sync if this file changes.
+CLAUDE.md

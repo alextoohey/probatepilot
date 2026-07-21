@@ -1,5 +1,127 @@
 # Architecture
 
+## System Overview
+
+Two services sharing one Redis-backed state store — each language doing what it's best at,
+not collapsed into one stack for its own sake:
+
+```
+┌────────────────────────┐         ┌─────────────────────────────┐
+│  web/  (TypeScript)     │  HTTP   │  agent/  (Python)            │
+│  Next.js 14 frontend    │ ──────▶ │  FastAPI "brain"             │
+│  • Dashboard / chat UI  │  SSE    │  • Auth (login / register)   │
+│  • Deepgram voice       │ ◀────── │  • Document intelligence     │
+│  • Sentry observability │         │  • RAG chat (streaming)      │
+└───────────┬─────────────┘         │  • DeadlineAgent (tool-use)  │
+            │                       │  • ResearchAgent (prototype) │
+            │                       │  • Letter gen · Email (Resend)│
+            │                       │  • Phoenix tracing + evals   │
+            │                       └──────────────┬──────────────┘
+            │        Redis (KV estate state + vector search)        │
+            └───────────────────────┬──────────────────────────────┘
+                                    ▼
+              Redis Cloud (KV + Redis 8 Vector Sets)
+               (Upstash / in-memory backends also supported)
+```
+
+- **Python (`agent/`)** owns all Claude reasoning, document parsing, embeddings, the agent
+  loop, and RAG.
+- **TypeScript (`web/`)** owns everything the user sees and touches, plus voice.
+- **Redis is the only thing both services talk to.** It's the contract between them — the
+  browser never calls the Python service directly; every request is proxied through Next.js,
+  which forwards the session as a bearer token server-side, so there's no CORS surface at all.
+
+### Stack
+
+| | |
+|---|---|
+| **`agent/`** | FastAPI + Uvicorn, Python 3.11+ · Anthropic SDK · OpenAI embeddings (`text-embedding-3-small`, 1536-dim) · Pydantic v2 · bcrypt sessions · Phoenix tracing · `pdfplumber` + Claude vision for documents |
+| **`web/`** | Next.js 14 App Router, TypeScript · Zod (mirrors the Pydantic contract) · Deepgram (voice) · Sentry |
+| **Store** | `agent/store/` supports three interchangeable backends behind one API, selected by `STORE_BACKEND`: `redis_cloud` (Redis Cloud KV + Redis 8 Vector Sets), `upstash` (Upstash Redis REST + Upstash Vector), and `memory` (in-process, zero setup — the default) |
+
+The model used throughout `agent/` today is `claude-sonnet-4-6` (`agent/llm/claude.py`
+exposes `DOCUMENT_MODEL` and `REASONING_MODEL`, both currently pointed at it) — swap
+`REASONING_MODEL` to `claude-opus-4-8` for a heavier reasoning path on the DeadlineAgent if
+wanted.
+
+## Project Layout
+
+### Python (`agent/`)
+
+| Purpose | Path |
+|---------|------|
+| FastAPI app factory (routers only — no route logic) | `agent/main.py` |
+| Auth + estate-ownership dependencies | `agent/api/deps.py` |
+| Route handlers, one file per domain | `agent/api/routers/` |
+| Anthropic client + helpers | `agent/llm/claude.py` |
+| OpenAI embeddings | `agent/llm/embeddings.py` |
+| Store domain layer (key naming, validation) | `agent/store/redis_client.py` |
+| Store backends (memory / Upstash / Redis Cloud) | `agent/store/backends/` |
+| Pydantic models | `agent/schemas/` (estate, api, documents, auth) |
+| Document parsers (will/bank/deed/creditor) | `agent/documents/` |
+| Upload → extract → merge → embed pipeline | `agent/documents/upload_pipeline.py` |
+| DeadlineAgent (tool-use loop) | `agent/agents/deadline_agent.py` |
+| ResearchAgent (prototype, not wired to a trigger — see `docs/RESEARCH_AGENT_REDESIGN.md`) | `agent/researcher/research_agent.py` |
+| CA probate rules | `agent/rules/california_probate.py` |
+| Auth (bcrypt + sessions) | `agent/auth/security.py` |
+| Email notifications (Resend) | `agent/notify/email.py` |
+| LLM-as-judge eval | `agent/evals/deadline_next_steps_quality.py` |
+| Prompts | `agent/prompts/` |
+| Phoenix setup | `agent/observability/phoenix.py` |
+| Demo seed data | `agent/seed/demo_estate.py` |
+| Shared constants (e.g. `DEFAULT_ESTATE_ID`) | `agent/constants.py` |
+
+### TypeScript (`web/`)
+
+| Purpose | Path |
+|---------|------|
+| Deepgram client | `web/lib/deepgram.ts` |
+| Agent API client (typed fetch wrapper) | `web/lib/agentClient.ts` |
+| Sentry wrappers | `web/lib/sentry.ts` |
+| Shared TS types (mirror Pydantic) | `web/types/` |
+| Zod schemas | `web/lib/schemas/` |
+| API routes (proxy + voice) | `web/app/api/` |
+| UI components | `web/components/` |
+
+## API Reference
+
+Every route below except `/health`, `/seed`, and `/auth/*` requires a session and estate
+ownership (`api/deps.py::ensure_estate_access`) — the one standing exception is the canonical
+seeded estate (`demo-milligan`), which stays world-readable for `/seed`-based testing and
+curl access without a session.
+
+### Python `agent/` (FastAPI)
+
+| Route | Method | Purpose |
+|-------|--------|---------|
+| `/health` | GET | Service status + Phoenix/instrumentor readiness |
+| `/auth/register` · `/auth/login` · `/auth/logout` | POST | Account + cookie session |
+| `/auth/demo` | POST | Guest session on its own throwaway copy of the seed estate — every call mints an independent `demo-{uuid}` estate + user (self-expiring), so one visitor's edits never show up for another |
+| `/auth/me` | GET | Current authenticated user |
+| `/estates` | POST | Create a real estate shell |
+| `/estate/{estate_id}` | GET | Fetch full estate state |
+| `/seed` | POST | Reset the canonical demo estate to a known-good state |
+| `/parse-document` · `/parse-documents` | POST | Upload(s) → Claude extract → embed → store |
+| `/document/{estate_id}/{doc_id}` | GET / DELETE | Fetch or remove an uploaded document |
+| `/deadline-agent` | POST | Run the full Claude-enhanced agent loop → return ranked alerts |
+| `/research-agent` | POST | Prototype news-search pass → review alerts (see `docs/RESEARCH_AGENT_REDESIGN.md`) |
+| `/complete-alert` | POST | Mark an alert/step done → updated estate |
+| `/chat` | POST | Message → RAG retrieve → Claude stream (SSE) |
+| `/chat-history/{estate_id}` · `/chat-sessions/{estate_id}` | GET / POST | Chat persistence |
+| `/chat-suggestions` | POST | Suggested follow-up questions |
+| `/generate-letter` · `/save-letter` | POST | Draft / persist a letter |
+| `/letter/{estate_id}/{letter_id}` | DELETE | Remove a saved letter |
+| `/notify/email` | POST | Send weekly recap / alert digest via Resend (UI gated — see `docs/DEPLOYMENT.md`) |
+
+### TypeScript `web/` (Next.js route handlers)
+
+| Route | Method | Purpose |
+|-------|--------|---------|
+| `/api/auth/{login,logout,register,me}` | * | Auth proxied to the Python service |
+| `/api/voice/transcribe` | POST | Audio → Deepgram STT → text |
+| `/api/voice/speak` | POST | Text → Deepgram TTS → audio |
+| `/api/agent/*` | * | Thin Sentry-wrapped proxy to the Python service |
+
 ## Core Data Shapes
 
 The contract: defined once as **Pydantic models** in `agent/schemas/`, mirrored as **TypeScript types +
@@ -191,10 +313,14 @@ RULES YOU MUST FOLLOW:
 ## Demo Scenario
 
 `POST /seed` resets the canonical `demo-milligan` record (used for testing/curl access) to a
-known-good state. The "Try the demo" button is separate — each click copies this same seed
-content into a fresh, independent `demo-{uuid}` estate for that visitor only (see
-`CLAUDE.md#demo-estate-seed-data`), so visitors never share or reset each other's progress.
-The canonical seed content, defined in `agent/seed/demo_estate.py`:
+known-good state. The "Try the demo" button is separate: each click
+(`build_demo_estate_for_visitor()`) copies this same seed content into a fresh, independent
+`demo-{uuid}` estate plus a throwaway user, so visitors never share or reset each other's
+progress. Both self-expire via a Redis TTL (`DEMO_VISITOR_TTL_SECONDS`, `agent/constants.py`)
+that renews on every write, so abandoned sessions clean themselves up without a cron job.
+Login itself only runs `refresh_deadline_state()` (deterministic rules, no Claude call) so
+the dashboard populates instantly; the full Claude-enhanced pass runs afterward in the
+background. The canonical seed content, defined in `agent/seed/demo_estate.py`:
 
 ```
 demo-milligan
@@ -223,9 +349,12 @@ demo-milligan
   phase: 2
 ```
 
-This fires two CRITICAL alerts on load (exact day counts depend on the run date):
+This fires three CRITICAL alerts on load (exact day counts depend on the run date):
 
 1. **Creditors not yet notified** — the 30-day certified-mail window from the June 10
    appointment is closing.
-2. **DE-160 Inventory & Appraisal outstanding** — no appraisal on the Berkeley home or the
+2. **State agencies not yet notified** — Medi-Cal/DHCS, FTB, Victim Compensation, and child
+   support all have a 90-day window from appointment (CA Probate Code §9202); Medi-Cal
+   estate recovery in particular is a real, common personal-liability trap.
+3. **DE-160 Inventory & Appraisal outstanding** — no appraisal on the Berkeley home or the
    Honda Civic.

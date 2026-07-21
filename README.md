@@ -144,9 +144,8 @@ docs/      Architecture, database contract, evaluation methodology, deployment
 examples/  Sample estate documents for trying the upload pipeline
 ```
 
-Read [`CLAUDE.md`](CLAUDE.md) for the full architecture map, and
-[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for data shapes, the probate rule table, and
-the demo scenario.
+Read [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the system diagram, the project
+layout, the full API reference, data shapes, the probate rule table, and the demo scenario.
 
 ## Team
 

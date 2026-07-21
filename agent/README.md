@@ -3,8 +3,8 @@
 Python FastAPI service: auth, document intelligence, estate memory, RAG chat, the
 DeadlineAgent and ResearchAgent, letter generation, and email notifications. Runs entirely
 on `claude-sonnet-4-6` today (see `DOCUMENT_MODEL` / `REASONING_MODEL` in
-`llm/claude.py`). See [the root CLAUDE.md](../CLAUDE.md#api-surface) for the full route
-list.
+`llm/claude.py`). See [`docs/ARCHITECTURE.md`](../docs/ARCHITECTURE.md#api-reference) for
+the full route list.
 
 ## Layout
 

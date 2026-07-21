@@ -4,8 +4,9 @@ ProbatePilot is two services: the Python agent (`agent/`) and the Next.js
 frontend (`web/`). Deploy the agent first, then point the frontend at it.
 
 Everything here is optional beyond `ANTHROPIC_API_KEY` — the app is designed
-to degrade gracefully. See the [env var reference](../CLAUDE.md#environment-variables)
-for what each key unlocks.
+to degrade gracefully. See [`agent/.env.example`](../agent/.env.example) and
+[`web/.env.local.example`](../web/.env.local.example) for the full, authoritative list of
+what each key unlocks.
 
 ## 1. Deploy the agent (Render)
 
