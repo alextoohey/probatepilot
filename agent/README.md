@@ -14,7 +14,8 @@ the full route list.
 - `documents/` — type router, will / bank statement / deed / creditor-notice parsers,
   and the upload → extract → merge → embed pipeline
 - `agents/` — the DeadlineAgent tool-use loop
-- `researcher/` — the weekly probate-law ResearchAgent
+- `researcher/` — ResearchAgent prototype (news-search based, not wired to a trigger —
+  see `docs/RESEARCH_AGENT_REDESIGN.md`)
 - `rules/` — the California probate ruleset
 - `schemas/` — Pydantic contracts (estate, api, documents, auth)
 - `store/` — domain layer (`redis_client.py`) + backend implementations

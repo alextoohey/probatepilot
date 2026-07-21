@@ -76,9 +76,11 @@ forwards the session as a bearer token server-side, so there's no CORS surface t
   `agent/store/` supports three interchangeable backends — in-memory (default, zero setup),
   Upstash Redis, and Redis Cloud with Redis 8 Vector Sets for semantic search — behind one
   API, selected by an env var.
-- **Auth is session-based with real ownership checks.** Every estate-scoped endpoint
-  requires a session and verifies the caller owns that estate, except the seeded demo
-  estate, which stays world-readable so a recruiter can click around without registering.
+- **Auth is session-based with real ownership checks, including in the demo.** Every
+  estate-scoped endpoint requires a session and verifies the caller owns that estate — the
+  demo is not an exception to this, it's automated: "Try the demo" mints a real session on a
+  fresh, independent copy of the seed estate for that visitor only (self-expiring, no
+  registration form), so one visitor's edits never show up for another.
 - **Every Claude and OpenAI call is traced.** Phoenix spans wrap the full agent loop
   (`estate_id`, rules checked, fallback used, tool calls); an LLM-as-judge eval
   (`agent/evals/deadline_next_steps_quality.py`) scores the DeadlineAgent's output quality
