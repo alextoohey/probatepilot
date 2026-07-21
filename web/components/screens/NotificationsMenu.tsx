@@ -7,6 +7,14 @@ import type { Alert } from "@/types";
 
 const I = ExecutorIcons;
 
+// The email-send pipeline (agent/notify/email.py, Resend) is fully built and
+// tested, but Resend's sandbox sender only delivers to the account owner's
+// own address until a domain is verified — so right now this would only ever
+// work for whoever owns the Resend account, not an arbitrary logged-in user.
+// Hidden until a verified sending domain is in place; flip this back on then.
+// See docs/DEPLOYMENT.md "Known follow-up: email delivery" for the full story.
+const EMAIL_NOTIFICATIONS_ENABLED = false;
+
 export type NotifPrefs = { all: boolean; deadlines: boolean; weekly: boolean; email: boolean };
 
 type EmailPreview = { subject: string; body: string; sent: boolean; reason: string; recipient?: string | null };
@@ -175,7 +183,9 @@ export function NotificationsMenu({ prefs, setPrefs, alerts = [], estateId, exec
                 <div style={{ height: 1, background: "var(--border-subtle)", margin: "4px 0" }} />
                 {row("deadlines", "Deadline & liability alerts", "Warn me before a window closes.", !on)}
                 {row("weekly", "Weekly summary", "A Monday digest of what's open and done.", !on)}
-                {row("email", "Email me copies", "Send alerts to " + (executorEmail || "your inbox") + ".", !on)}
+                {EMAIL_NOTIFICATIONS_ENABLED
+                  ? row("email", "Email me copies", "Send alerts to " + (executorEmail || "your inbox") + ".", !on)
+                  : null}
               </div>
             ) : (
               <div>
@@ -213,7 +223,7 @@ export function NotificationsMenu({ prefs, setPrefs, alerts = [], estateId, exec
                   )}
                 </div>
 
-                {on ? (
+                {on && EMAIL_NOTIFICATIONS_ENABLED ? (
                   <div style={{ padding: "10px 18px", borderTop: "1px solid var(--border-subtle)", background: "var(--paper-50)", display: "flex", flexWrap: "wrap", gap: 14 }}>
                     <button onClick={() => sendEmail("weekly")} disabled={!!sending}
                       style={{ display: "inline-flex", alignItems: "center", gap: 6, border: "none", background: "transparent", cursor: sending ? "default" : "pointer", color: "var(--text-brand)", fontSize: "var(--text-sm)", fontWeight: 600, padding: 0 }}>

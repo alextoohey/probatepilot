@@ -53,7 +53,10 @@ language for what it is best at; do not collapse everything into one stack.
     heavier reasoning path back.
 - **Embeddings**: OpenAI `text-embedding-3-small` (`openai`), 1536-dim
 - **Auth**: cookie sessions with `bcrypt` password hashing (`agent/auth/`)
-- **Email**: Resend for the weekly recap / alert digest (`agent/notify/email.py`)
+- **Email**: Resend for the weekly recap / alert digest (`agent/notify/email.py`) — built
+  and tested, but the UI triggers are gated off (`EMAIL_NOTIFICATIONS_ENABLED` in
+  `web/components/screens/NotificationsMenu.tsx`) until a verified sending domain exists;
+  see `docs/DEPLOYMENT.md#known-follow-up-email-delivery`
 - **Validation**: Pydantic v2 for all Claude structured outputs and API schemas
 - **Observability**: Phoenix tracing (`phoenix.otel.register` + OpenInference) — traces
   Anthropic, OpenAI embeddings, and the full agent loop; plus an LLM-as-judge eval

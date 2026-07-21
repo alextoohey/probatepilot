@@ -41,7 +41,10 @@ legal judgment, it says so plainly instead of guessing.
 - **It writes the letters.** Creditor notices, bank notifications, beneficiary updates —
   drafted from the estate's actual facts, ready to sign.
 - **It checks in on its own.** A weekly ResearchAgent watches for California probate-law
-  changes; an email digest keeps the executor current without opening the app.
+  changes and surfaces what's relevant right in the dashboard. An email digest pipeline
+  (Resend, human-toned templates, on-demand send) is fully built — it's just gated behind
+  a verified sending domain for now, so it's not exposed in the UI yet. See
+  [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md#known-follow-up-email-delivery).
 
 <p float="left">
   <img src="docs/assets/documents.png" width="49%" alt="Document upload with the parsing checklist" />

@@ -62,3 +62,33 @@ The live app is empty until the demo estate exists. Either:
 - **Auth**: every estate-scoped endpoint requires a session and ownership,
   except the seeded demo estate, which stays world-readable so the "Try the
   demo" flow works without registration. See `agent/api/deps.py`.
+
+## Known follow-up: Email delivery
+
+The email pipeline (`agent/notify/email.py`) is fully built and tested — real Resend
+integration, human-toned weekly recap / alert digest templates, graceful degradation to a
+preview when unconfigured. The "Send weekly recap" and "Email me copies" controls are
+hidden in the UI (`EMAIL_NOTIFICATIONS_ENABLED = false` in
+`web/components/screens/NotificationsMenu.tsx`) rather than shipped half-working, for one
+specific reason: Resend's sandbox sender (`onboarding@resend.dev`) only delivers to the
+account owner's own address until a domain is verified. Without that, the feature would
+only ever work for whoever owns the Resend account — not an arbitrary logged-in user or a
+recruiter trying the demo — which reads as broken rather than gated.
+
+To turn it back on once a domain is available:
+
+1. Buy or claim a domain (GitHub Student Developer Pack includes a free `.me` domain via
+   Namecheap if eligible; otherwise a cheap TLD from Namecheap/Porkbun/Cloudflare runs
+   $1–15/year).
+2. Verify it with Resend (Dashboard → Domains → Add Domain, then add the SPF/DKIM DNS
+   records they provide).
+3. Set `EMAIL_FROM=ProbatePilot <notifications@yourdomain.com>` in `agent/.env` and
+   restart the agent — `send_email()` already passes `EMAIL_FROM` straight through to
+   Resend's `from` field, so no code change is needed there.
+4. Flip `EMAIL_NOTIFICATIONS_ENABLED` back to `true` in `NotificationsMenu.tsx`.
+5. Make sure `NOTIFY_OVERRIDE_RECIPIENT` is unset in the deployed environment — it's a
+   local-testing escape hatch that forces every recipient to one address, which would
+   misroute every real user's email to the developer's inbox if left on.
+
+This is a "buy/verify a domain" gap, not an engineering one — worth revisiting once this
+is actually deployed and worth the ~$10-15/year, not before.
