@@ -8,42 +8,99 @@ designed to degrade gracefully. See [`agent/.env.example`](../agent/.env.example
 [`web/.env.local.example`](../web/.env.local.example) for the full, authoritative list of
 what each key unlocks.
 
-## 1. Deploy the agent (Render)
+## 1. Deploy the agent
+
+Two documented paths. **Cloud Run is the recommended default** — cold starts on a
+scale-to-zero free service are typically low-single-digit seconds, versus Render free
+tier's ~30-60s (see the Notes section below for why that gap exists and matters for a
+recruiter clicking a cold link). Render is documented as the simpler alternative if you'd
+rather not touch the `gcloud` CLI.
+
+Either way, first: provision a [Redis Cloud](https://redis.io/cloud/) instance (Redis 8,
+for its Vector Sets support — the free tier is enough) and push this repo to your own
+GitHub account. You'll need the Redis connection string for both paths below. Never put a
+real value in a committed file — see
+[`docs/database.md`](database.md#never-commit-a-real-redis_url) for why.
+
+### Option A: Google Cloud Run (recommended — fast cold starts)
+
+`agent/Dockerfile` needs zero changes — it already reads `$PORT` at runtime exactly the
+way Cloud Run requires (verified locally this session: `docker run -e PORT=10000 ...`
+correctly served on the injected port).
+
+1. Install the [gcloud CLI](https://cloud.google.com/sdk/docs/install), then:
+   ```bash
+   gcloud auth login
+   gcloud projects create your-project-id   # or use an existing project
+   gcloud config set project your-project-id
+   gcloud services enable run.googleapis.com artifactregistry.googleapis.com
+   ```
+2. Create a one-time Artifact Registry repo to hold the image, and authenticate Docker
+   against it:
+   ```bash
+   gcloud artifacts repositories create probatepilot \
+     --repository-format=docker --location=us-west1
+   gcloud auth configure-docker us-west1-docker.pkg.dev
+   ```
+3. Build and push, using the exact same build command already verified working this
+   session (repo root as build context, `agent/Dockerfile` as the Dockerfile path):
+   ```bash
+   docker build -f agent/Dockerfile \
+     -t us-west1-docker.pkg.dev/your-project-id/probatepilot/agent:latest .
+   docker push us-west1-docker.pkg.dev/your-project-id/probatepilot/agent:latest
+   ```
+4. Deploy it:
+   ```bash
+   gcloud run deploy probatepilot-agent \
+     --image us-west1-docker.pkg.dev/your-project-id/probatepilot/agent:latest \
+     --region us-west1 --allow-unauthenticated \
+     --set-env-vars STORE_BACKEND=redis_cloud
+   ```
+5. Add the secret env vars through the Cloud Console instead of the CLI (Cloud Run service
+   → **Edit & Deploy New Revision** → **Variables & Secrets**), so they don't land in your
+   shell history: `ANTHROPIC_API_KEY`, `REDIS_URL` (both required), `OPENAI_API_KEY`
+   (optional). For real secret hygiene beyond that, Cloud Run integrates with Secret
+   Manager (`--set-secrets` instead of `--set-env-vars`) — worth doing if you want to go
+   further, not required to get this running.
+6. Once live, note the service URL (`https://probatepilot-agent-xxxx-uw.a.run.app`).
+   Confirm it's healthy: `curl https://<your-service>.run.app/health`.
+
+**Caveat:** `gcloud` CLI flags and Cloud Run/Artifact Registry free-tier terms shift over
+time, and this wasn't run against a live GCP account to confirm end-to-end — cross-check
+against [Cloud Run's own quickstart](https://cloud.google.com/run/docs/quickstarts) if any
+command above doesn't behave as written.
+
+### Option B: Render (simpler, slower cold starts)
 
 A `render.yaml` blueprint is included at the repo root.
 
-1. Provision a [Redis Cloud](https://redis.io/cloud/) instance first (Redis 8, for its
-   Vector Sets support — the free tier is enough). You'll need its connection string for
-   the next step. Never put a real value in a committed file — see
-   [`docs/database.md`](database.md#never-commit-a-real-redis_url) for why.
-2. Push this repo to your own GitHub account.
-3. In the [Render dashboard](https://dashboard.render.com), choose **New +** →
+1. In the [Render dashboard](https://dashboard.render.com), choose **New +** →
    **Blueprint**, and point it at your fork.
-4. Render reads `render.yaml` and provisions a free web service from
+2. Render reads `render.yaml` and provisions a free web service from
    `agent/Dockerfile`. It will prompt for `ANTHROPIC_API_KEY` and `REDIS_URL` (both
    required) and `OPENAI_API_KEY` (optional) at first deploy.
-5. Once live, note the service URL (`https://probatepilot-agent-xxxx.onrender.com`).
+3. Once live, note the service URL (`https://probatepilot-agent-xxxx.onrender.com`).
    Confirm it's healthy: `curl https://<your-service>.onrender.com/health`.
 
 **Any Docker host works the same way** — `agent/Dockerfile` builds standalone
 (`docker build -f agent/Dockerfile -t probatepilot-agent .` from the repo
-root) and reads `$PORT` at runtime, so Railway, Fly.io, and Cloud Run all work
-without changes.
+root) and reads `$PORT` at runtime, so Railway and Fly.io work without changes too.
 
-**Why Redis Cloud instead of the default `STORE_BACKEND=memory`:** the memory backend
-keeps all estate data, including real registered accounts (not just the demo estate), in
-the container's RAM. Render's free tier spins the container down after 15 minutes idle and
-starts a clean process on the next request — memory-backed data doesn't survive that, so a
-real account made yesterday would just be gone. `render.yaml` defaults to
-`STORE_BACKEND=redis_cloud` for exactly this reason; `memory` is still fine for local dev
-or a throwaway demo where that reset is acceptable.
+**Why Redis Cloud instead of the default `STORE_BACKEND=memory`, on either path:** the
+memory backend keeps all estate data, including real registered accounts (not just the
+demo estate), in the container's RAM. Both Render's free tier (idle spin-down) and Cloud
+Run's scale-to-zero (the same idea, just faster) start a clean process on the next
+request — memory-backed data doesn't survive that, so a real account made yesterday would
+just be gone. `render.yaml` defaults to `STORE_BACKEND=redis_cloud` for exactly this
+reason, and the Cloud Run steps above set it explicitly; `memory` is still fine for local
+dev or a throwaway demo where that reset is acceptable.
 
 ## 2. Deploy the frontend (Vercel)
 
 1. In [Vercel](https://vercel.com/new), import the same fork with **Root
    Directory** set to `web/`.
 2. Set the one required env var:
-   - `AGENT_API_URL` = the Render service URL from step 1
+   - `AGENT_API_URL` = the agent's service URL from step 1 (Cloud Run or Render)
 3. Optional env vars (voice and error tracking degrade cleanly without them):
    `DEEPGRAM_API_KEY`, `NEXT_PUBLIC_SENTRY_DSN`, `SENTRY_DSN`, `SENTRY_ORG`,
    `SENTRY_PROJECT`, `NEXT_PUBLIC_APP_URL` (your Vercel URL, used for
@@ -56,13 +113,14 @@ The live app is empty until the demo estate exists. Either:
 
 - Click **Try the demo** on the deployed `/welcome` page (this calls
   `POST /auth/demo` on the agent, which seeds it on first use), or
-- Seed it directly: `curl -X POST https://<your-agent>.onrender.com/seed`
+- Seed it directly: `curl -X POST https://<your-agent-url>/seed`
 
 ## Notes
 
-- **Free-tier cold starts**: Render's free plan spins down after 15 minutes
-  idle and takes ~30–60s to wake on the next request. The first load after
-  idle will feel slow — this is Render, not the app.
+- **Cold starts**: both paths scale to zero when idle, so the first request after a quiet
+  period always pays a startup cost — the question is how much. Cloud Run's free tier
+  typically wakes in low single-digit seconds; Render's free plan takes ~30-60s. Neither is
+  the app being slow, it's the platform starting a fresh container.
 - **CORS**: the frontend never calls the agent directly from the browser —
   every request is proxied through Next.js API routes (`web/app/api/agent/[...path]`),
   which forward the session cookie as a Bearer token server-side. No CORS
