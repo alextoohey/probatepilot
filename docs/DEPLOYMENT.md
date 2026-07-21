@@ -147,6 +147,114 @@ The live app is empty until the demo estate exists. Either:
   `POST /auth/demo` on the agent, which seeds it on first use), or
 - Seed it directly: `curl -X POST https://<your-agent-url>/seed`
 
+## 4. Auto-deploy on push (optional)
+
+Both platforms can redeploy automatically on every push to `main`, instead of you re-running
+the manual commands above. Neither is wired up by the steps in sections 1-2 alone — both
+need one extra one-time setup pass, documented here exactly as it was actually done
+end-to-end for this app, gotchas included.
+
+### Cloud Run: a Cloud Build trigger
+
+1. Enable the APIs: `gcloud services enable cloudbuild.googleapis.com
+   secretmanager.googleapis.com`
+2. Connect GitHub to Cloud Build (one-time OAuth):
+   ```bash
+   gcloud builds connections create github probatepilot-github --region=us-west1
+   ```
+   This will likely fail the first time with a Secret Manager permission error — Cloud
+   Build's own service agent needs a role granted before it can store the resulting OAuth
+   token:
+   ```bash
+   gcloud projects add-iam-policy-binding <PROJECT_ID> \
+     --member="serviceAccount:service-<PROJECT_NUMBER>@gcp-sa-cloudbuild.iam.gserviceaccount.com" \
+     --role="roles/secretmanager.admin"
+   ```
+   Re-run the `connections create` command after granting it; it'll print a URL to open in a
+   browser to authorize.
+3. Link the specific repo to that connection:
+   ```bash
+   gcloud builds repositories create probatepilot-repo \
+     --connection=probatepilot-github --region=us-west1 \
+     --remote-uri="https://github.com/<you>/probatepilot.git"
+   ```
+4. Create a dedicated service account for the trigger to run as (cleaner than reusing the
+   legacy default Cloud Build service account, which has broad `Editor`-level access by
+   default):
+   ```bash
+   gcloud iam service-accounts create probatepilot-deploy \
+     --display-name="ProbatePilot Cloud Build Deploy"
+   for role in roles/run.admin roles/iam.serviceAccountUser \
+               roles/artifactregistry.writer roles/logging.logWriter; do
+     gcloud projects add-iam-policy-binding <PROJECT_ID> \
+       --member="serviceAccount:probatepilot-deploy@<PROJECT_ID>.iam.gserviceaccount.com" \
+       --role="$role"
+   done
+   ```
+5. `cloudbuild.yaml` (repo root) defines the actual build: `docker build -f agent/Dockerfile`
+   → push to Artifact Registry → `gcloud run deploy`. Deliberately has **no
+   `--platform linux/amd64` flag** despite that being required for the manual local build
+   earlier — Cloud Build's own workers run on `linux/amd64` natively, confirmed by the first
+   real trigger run succeeding without it. It also has **no `--set-env-vars`** in the deploy
+   step, deliberately: `gcloud run deploy` bases a new revision on the currently-serving
+   revision's config and only overrides what's explicitly passed, so the secrets set once
+   manually when the service was first created carry forward automatically — verified after
+   the first automated deploy by checking the new revision still had all four env vars set.
+   This also means no secret ever needs to live in this file, which is committed and public.
+6. Create the trigger. **The CLI version of this command
+   (`gcloud builds triggers create github --repository=... --branch-pattern=... `) returned
+   an opaque `INVALID_ARGUMENT` with no further detail** when this was actually done — root
+   cause was never fully isolated. The GCP Console GUI flow (**Cloud Build → Triggers →
+   Create Trigger**) worked on the first attempt with equivalent settings: Event = Push to a
+   branch, Repository service = Cloud Build repositories, Repository generation = 2nd gen,
+   Repository = your repo, Branch = `^main$` (Invert regex: off), Configuration = Cloud
+   Build configuration file at `cloudbuild.yaml`, Region = matching the connection's region,
+   Service account = the dedicated one from step 4, "Send build logs to GitHub" = on (safe —
+   the build never handles secrets), "Require approval before build executes" = off (this is
+   the actual auto-deploy switch; leaving it on means every push still needs a manual click).
+   If the GUI repository picker doesn't find your repo, or the CLI trigger creation fails
+   with the same opaque error: check **github.com/settings/installations** → "Google Cloud
+   Build" → **Configure** → confirm the correct repo is actually selected (a GitHub App
+   installation can silently be scoped to a *different* repository than the one you meant,
+   including one with a similar name).
+7. Test it without waiting for a real push: `gcloud builds triggers run
+   probatepilot-agent-deploy --branch=main --region=us-west1`, then confirm with
+   `gcloud run revisions list --service=probatepilot-agent --region=us-west1` that a new
+   revision landed.
+
+### Vercel: connect the Git repository
+
+The CLI path (`vercel git connect <repo-url>`) needs GitHub linked as a **login connection**
+on your Vercel account first (Account Settings → Login Connections) — without it, the
+command fails with "You need to add a Login Connection to your GitHub account first."
+
+Simplest in practice: use the Vercel **dashboard** instead — Project → Settings → **Git** →
+connect the repository directly there. If it fails with something like "Make sure ... you
+have access to the repository," the same GitHub-App-scoping issue as Cloud Build applies:
+check **github.com/apps/vercel** → confirm the repo is actually included in what the app can
+access (note: "Authorized" and "Installed" are different things on GitHub — an OAuth
+authorization alone isn't enough, the App itself has to be installed with access to the
+specific repo).
+
+**Important gotcha if this repo was originally linked via CLI from inside `web/`** (as this
+one was, before the dashboard connection): connecting via the dashboard operates from the
+repository root and sets **Root Directory = `web`** *relative to that root* in the project's
+settings. If you then try to redeploy via CLI from inside `web/` itself, Vercel appends the
+configured Root Directory to your current directory and looks for a nonexistent `web/web/`,
+failing with "The provided path ... does not exist." Fix: re-link from the **repo root**
+instead (`cd` to the repo root, `vercel link --yes --project <name>` — it links to the
+existing project rather than creating a duplicate), and remove the now-stale `.vercel/`
+folder from inside `web/` so a future `vercel` invocation from there doesn't hit the same
+bug again.
+
+Also worth setting once connected: Project Settings → General → **Node.js Version** to match
+`web/.nvmrc` (this app pins `20`, not whatever Vercel's project default happens to be), and
+**"Skip deployments when there are no changes to the root directory or its dependencies"** —
+on, since most commits to this repo touch `agent/` only and shouldn't trigger a frontend
+rebuild at all. Settings changes here only apply to the *next* deployment, not retroactively
+— redeploy once after changing them to confirm (`vercel --prod --yes` from the repo root) if
+you want to verify immediately rather than wait for the next real push.
+
 ## Notes
 
 - **Cold starts**: both paths scale to zero when idle, so the first request after a quiet

@@ -27,3 +27,5 @@ tests/.compiled/
 # human reader needs (architecture, API surface, project layout) lives in
 # docs/ARCHITECTURE.md instead; keep that in sync if this file changes.
 CLAUDE.md
+.vercel
+.env*
