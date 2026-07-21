@@ -76,6 +76,14 @@ dev; it's not what's actually running behind the live deploy.
   output is validated against the deterministic alerts and rejected if it drops or invents
   one. A missing API key or a bad model response both degrade to the same rule-evaluated
   alerts, just plainer prose. See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+- **Chat is real RAG, not the estate JSON stuffed into a system prompt and called a day.**
+  Every uploaded document is chunked, embedded (OpenAI `text-embedding-3-small`, 1536-dim,
+  with a deterministic hashing-trick fallback if unconfigured), and stored in a per-estate
+  Redis 8 Vector Set. Each chat message embeds the query and retrieves the top 5 most
+  relevant chunks *from that estate only* before Claude sees anything — a retrieval failure
+  degrades to estate-state-only answers instead of failing the chat. See
+  [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#core-ai-flows)'s Chat RAG flow and
+  [`docs/database.md`](docs/database.md) for the vector storage details.
 - **The store is a real backend abstraction, not a wrapper around one database.**
   `agent/store/` supports three interchangeable backends behind one API, selected by an env
   var — **Redis Cloud (Redis 8, KV + Vector Sets) is what the deployed app actually runs
