@@ -52,6 +52,16 @@ export function LettersScreen({ estate }: Props) {
   const [progress, setProgress] = React.useState(0);
   const [deletingId, setDeletingId] = React.useState<string | null>(null);
 
+  // If the user navigates away mid-generation, the draft would otherwise just
+  // be discarded when the response lands on an unmounted component — the
+  // generation still cost a real Claude call. Auto-save it instead so it
+  // shows up in Saved Letters rather than being silently wasted.
+  const mountedRef = React.useRef(true);
+  React.useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+
   // Simulated drafting progress — there's no token-level signal from the
   // single-shot letter call, so we ramp toward ~92% while busy and reset after.
   React.useEffect(() => {
@@ -134,14 +144,21 @@ export function LettersScreen({ estate }: Props) {
   async function generate() {
     if (!canGenerate) return;
     const recipientName = isCustom ? customRecipient.trim() || undefined : recipient || undefined;
+    const draftType = type;
     setBusy(true); setDraft(""); setError(null);
     try {
       const res = await generateLetter(type, estateId, recipientName, isCustom ? instructions.trim() : undefined);
-      setDraft(res.draft);
+      if (mountedRef.current) {
+        setDraft(res.draft);
+      } else {
+        await saveLetter(estateId, draftType, res.draft, recipientName || null).catch(() => {});
+      }
     } catch (e) {
-      setError(e instanceof Error ? e.message : "I couldn't draft that letter. Make sure the agent is running, then try again.");
+      if (mountedRef.current) {
+        setError(e instanceof Error ? e.message : "I couldn't draft that letter. Make sure the agent is running, then try again.");
+      }
     } finally {
-      setBusy(false);
+      if (mountedRef.current) setBusy(false);
     }
   }
 
