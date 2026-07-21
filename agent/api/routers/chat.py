@@ -10,7 +10,7 @@ from api.deps import ensure_estate_access, optional_user, require_estate_access
 from llm.claude import stream_chat, suggest_followups
 from llm.embeddings import embed_query
 from observability.phoenix import set_span_attribute, set_span_error, span
-from prompts.system import build_chat_prompt
+from prompts.system import build_chat_system_blocks
 from schemas.api import (
     ChatHistoryResponse,
     ChatRequest,
@@ -55,11 +55,11 @@ async def chat(request: ChatRequest, user: User | None = Depends(optional_user))
             LOGGER.exception("Chat retrieval failed; continuing with estate state only.")
         set_span_attribute(current_span, "retrieval_failed", retrieval_failed)
         set_span_attribute(current_span, "retrieved_chunks", len(matches))
-        prompt = build_chat_prompt(
+        system_blocks = build_chat_system_blocks(
             estate_state.model_dump_json(),
             [match.text for match in matches],
         )
-        set_span_attribute(current_span, "prompt_length", len(prompt))
+        set_span_attribute(current_span, "prompt_length", sum(len(b["text"]) for b in system_blocks))
         # Prior turns give the model conversational context; the current message
         # is appended inside stream_chat.
         _, session_messages = get_chat_session_history(request.estateId, request.sessionId)
@@ -80,7 +80,7 @@ async def chat(request: ChatRequest, user: User | None = Depends(optional_user))
             retrieved_chunks=len(matches),
         ):
             answer = ""
-            async for token in stream_chat(prompt, request.message, history):
+            async for token in stream_chat(system_blocks, request.message, history):
                 answer += token
                 yield f"data: {json.dumps({'token': token})}\n\n"
             # Persist the exchange so the conversation survives reloads.

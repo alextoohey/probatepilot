@@ -5,12 +5,17 @@ from typing import Any
 
 ATTORNEY_INPUT_SENTENCE = "This requires your attorney's input — it involves [reason]."
 
-# Not yet using Anthropic prompt caching (no `cache_control` anywhere in llm/claude.py) —
-# BASE_CHAT_SYSTEM_PROMPT below is a genuinely stable prefix (same text every request) that
-# would be a good caching candidate once that's added. Deliberately kept out of the prompt
-# string itself: text inside BASE_CHAT_SYSTEM_PROMPT is sent to Claude verbatim as part of
-# the real system prompt on every chat request, so a TODO note living there would ship as if
-# it were an instruction to the model — this comment is the right place for it instead.
+# BASE_CHAT_SYSTEM_PROMPT is a genuinely stable prefix (same text every request), so
+# build_chat_system_blocks() below marks it with cache_control for Anthropic prompt
+# caching. Note: Anthropic only actually caches a block once it clears a minimum size
+# (1024 tokens for Sonnet/Opus) — this prompt is ~230 tokens, so the marker is currently
+# a no-op in practice (verified against the live API: cache_creation/cache_read tokens
+# both measured 0), and starts saving real cost/latency automatically if this prompt
+# grows past the threshold. See docs/ARCHITECTURE.md's System Prompt section.
+# Deliberately kept out of the prompt string itself: text inside BASE_CHAT_SYSTEM_PROMPT
+# is sent to Claude verbatim as part of the real system prompt on every chat request, so
+# a note living there would ship as if it were an instruction to the model — this
+# comment is the right place for it instead.
 BASE_CHAT_SYSTEM_PROMPT = f"""You are an estate administration assistant helping an executor manage a California estate.
 
 RULES YOU MUST FOLLOW:
@@ -28,6 +33,35 @@ RULES YOU MUST FOLLOW:
 
 
 def build_chat_prompt(estate_json: str, retrieved_chunks: list[str]) -> str:
+    """Full chat system prompt as one string.
+
+    Kept for tests and any offline/debug use; the live Claude path uses
+    build_chat_system_blocks() below instead, so the stable BASE_CHAT_SYSTEM_PROMPT
+    prefix can be marked for Anthropic prompt caching.
+    """
+    return f"{BASE_CHAT_SYSTEM_PROMPT}\n{_build_chat_prompt_suffix(estate_json, retrieved_chunks)}"
+
+
+def build_chat_system_blocks(estate_json: str, retrieved_chunks: list[str]) -> list[dict[str, Any]]:
+    """Chat system prompt as Anthropic content blocks, split so the stable
+    BASE_CHAT_SYSTEM_PROMPT prefix (identical on every request) can be cached
+    with a cache_control breakpoint, while the per-request estate facts and
+    retrieved chunks stay uncached.
+    """
+    return [
+        {
+            "type": "text",
+            "text": BASE_CHAT_SYSTEM_PROMPT,
+            "cache_control": {"type": "ephemeral"},
+        },
+        {
+            "type": "text",
+            "text": _build_chat_prompt_suffix(estate_json, retrieved_chunks),
+        },
+    ]
+
+
+def _build_chat_prompt_suffix(estate_json: str, retrieved_chunks: list[str]) -> str:
     estate = _parse_estate_json(estate_json)
     deceased_name = estate.get("deceasedName", "the deceased")
     date_of_death = estate.get("dateOfDeath", "unknown")
@@ -37,7 +71,6 @@ def build_chat_prompt(estate_json: str, retrieved_chunks: list[str]) -> str:
     chunks = _format_retrieved_chunks(retrieved_chunks)
 
     return (
-        f"{BASE_CHAT_SYSTEM_PROMPT}\n"
         f"You are helping {executor_name} manage the estate of {deceased_name}, "
         f"who passed away on {date_of_death}.\n\n"
         f"This estate is in {state.title()}. Letters testamentary were issued on {appointment_date}, "

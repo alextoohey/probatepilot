@@ -51,13 +51,17 @@ def get_async_client() -> anthropic.AsyncAnthropic | None:
 
 async def create_reasoning_message(
     *,
-    system: str,
+    system: str | list[dict[str, Any]],
     messages: list[dict[str, Any]],
     tools: list[dict[str, Any]] | None = None,
     tool_choice: dict[str, Any] | None = None,
     max_tokens: int = 4096,
 ) -> Any:
     """Call Claude for reasoning/tool use.
+
+    ``system`` accepts either a plain string or a list of Anthropic content blocks —
+    pass blocks with a ``cache_control`` marker on a stable prefix to enable prompt
+    caching (see DEADLINE_AGENT_SYSTEM_BLOCKS in agents/deadline_agent.py).
 
     Raises when the client is unavailable so callers can use deterministic fallback.
     """
@@ -72,7 +76,7 @@ async def create_reasoning_message(
         llm_model=REASONING_MODEL,
         tools_count=len(tools or []),
         messages_count=len(messages),
-        prompt_length=len(system),
+        prompt_length=_system_length(system),
     ):
         request: dict[str, Any] = {
             "model": REASONING_MODEL,
@@ -208,11 +212,16 @@ async def generate_letter_draft(
 
 
 async def stream_chat(
-    prompt: str,
+    system: str | list[dict[str, Any]],
     message: str,
     history: list[dict[str, str]] | None = None,
 ) -> AsyncIterator[str]:
     """Stream chat tokens from Claude when configured, else use an offline fallback.
+
+    ``system`` accepts either a plain string or a list of Anthropic content blocks —
+    build_chat_system_blocks() in prompts/system.py returns blocks with a
+    cache_control marker on the stable BASE_CHAT_SYSTEM_PROMPT prefix so repeated
+    chat requests reuse the cached prefix instead of reprocessing it.
 
     ``history`` is the prior conversation (alternating user/assistant turns) so the
     model keeps context across messages; the current ``message`` is appended last.
@@ -227,7 +236,7 @@ async def stream_chat(
         action_type="chat_query",
         llm_provider="anthropic",
         llm_model=REASONING_MODEL,
-        prompt_length=len(prompt),
+        prompt_length=_system_length(system),
         message_length=len(message),
         history_turns=len(prior),
     ) as current_span:
@@ -237,7 +246,7 @@ async def stream_chat(
                 async with client.messages.stream(
                     model=REASONING_MODEL,
                     max_tokens=1200,
-                    system=prompt,
+                    system=system,
                     messages=[*prior, {"role": "user", "content": message}],
                 ) as stream:
                     async for text in stream.text_stream:
@@ -345,6 +354,12 @@ def _asks_for_attorney_judgment(message: str) -> bool:
         "liable if",
     )
     return any(term in lowered for term in attorney_terms)
+
+
+def _system_length(system: str | list[dict[str, Any]]) -> int:
+    if isinstance(system, str):
+        return len(system)
+    return sum(len(block.get("text", "")) for block in system)
 
 
 def _message_text(response: Any) -> str:

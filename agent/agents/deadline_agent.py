@@ -37,6 +37,23 @@ Avoid duplicate alerts for the same operational issue.
 After evaluating the rules, submit the top 5 alerts with the submit_deadline_alerts tool.
 """.strip()
 
+# Anthropic prompt-caching content-block form of the prompt above. Identical text on
+# every DeadlineAgent call — not estate-specific, only the estate facts in the user
+# message vary — and reused up to MAX_TOOL_ROUNDS times per run, so marking it cached
+# also caches the (equally static) DEADLINE_AGENT_TOOLS + DEADLINE_ALERT_SUBMISSION_TOOL
+# definitions that precede it in the request. Unlike the chat prompt, this prefix
+# (~1,066 tokens, mostly the Alert JSON schema embedded in the submission tool) clears
+# Anthropic's 1024-token cache-eligibility floor — confirmed live: the first call in a
+# run reports cache_creation_input_tokens=1066, a repeat call reports
+# cache_read_input_tokens=1066. See docs/ARCHITECTURE.md's System Prompt section.
+DEADLINE_AGENT_SYSTEM_BLOCKS: list[dict[str, Any]] = [
+    {
+        "type": "text",
+        "text": DEADLINE_AGENT_SYSTEM_PROMPT,
+        "cache_control": {"type": "ephemeral"},
+    }
+]
+
 
 DEADLINE_AGENT_TOOLS: list[dict[str, Any]] = [
     {
@@ -206,7 +223,7 @@ async def _run_claude_tool_loop(estate: EstateState, deterministic_alerts: list[
 
     for _ in range(MAX_TOOL_ROUNDS):
         response = await create_reasoning_message(
-            system=DEADLINE_AGENT_SYSTEM_PROMPT,
+            system=DEADLINE_AGENT_SYSTEM_BLOCKS,
             messages=messages,
             tools=[*DEADLINE_AGENT_TOOLS, DEADLINE_ALERT_SUBMISSION_TOOL],
             tool_choice=(

@@ -339,9 +339,31 @@ RULES YOU MUST FOLLOW:
 - Always answer in plain English. Define any legal term you use.
 ```
 
-Note: this is **not** currently using Anthropic prompt caching (no `cache_control` anywhere
-in `agent/llm/claude.py`) — `BASE_CHAT_SYSTEM_PROMPT` is genuinely identical across every
-request, which makes it a real caching candidate, just not wired up yet.
+On the live Claude path this is sent as two Anthropic content blocks, not one string
+(`build_chat_system_blocks()`): `BASE_CHAT_SYSTEM_PROMPT` carries a `cache_control:
+{"type": "ephemeral"}` marker since it's identical on every request, and the estate
+facts/retrieved-chunks block stays uncached since it changes per request.
+`build_chat_prompt()` (a single concatenated string) still exists for tests and
+offline/debug use.
+
+**Caveat, verified against the live API, not assumed:** Anthropic only caches a block
+once it clears a minimum size (1024 tokens for Sonnet/Opus, 2048 for Haiku) — below that
+the `cache_control` marker is accepted but silently does nothing. `BASE_CHAT_SYSTEM_PROMPT`
+is ~230 tokens, so on today's prompt the chat cache does not actually activate
+(`cache_creation_input_tokens` / `cache_read_input_tokens` both measured at 0 across
+repeat calls). The marker is harmless and forward-compatible — it starts working the
+moment the prefix grows past the threshold (e.g. if the rules block or few-shot examples
+are expanded) — but as written today it's a no-op in practice, not a real saving.
+
+The DeadlineAgent's system prompt (`DEADLINE_AGENT_SYSTEM_BLOCKS` in
+`agent/agents/deadline_agent.py`) is cached the same way, and here it does activate: the
+system prompt plus the tool definitions that precede it in the request (`DEADLINE_AGENT_TOOLS`
++ `DEADLINE_ALERT_SUBMISSION_TOOL`, which embeds the full `Alert` JSON schema) total
+~1,066 tokens, above the threshold. Measured directly against the API: the first call in
+a run shows `cache_creation_input_tokens=1066` (cache write), and a repeat call with the
+identical prefix shows `cache_read_input_tokens=1066` (cache hit) — a real saving, reused
+up to `MAX_TOOL_ROUNDS` (5) times per agent run since the tool loop calls Claude
+repeatedly with the same static prefix.
 
 ---
 
