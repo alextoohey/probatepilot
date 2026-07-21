@@ -27,3 +27,12 @@ npm run dev
 The API proxy expects the Python service at `AGENT_API_URL`, defaulting to
 `http://localhost:8000`.
 
+## Deployment
+
+Deployed on Vercel, auto-deploying on every push to `main` that touches this directory
+(path-scoped via "Skip deployments when there are no changes to the root directory" in the
+project's Vercel settings, so an `agent/`-only commit doesn't trigger a pointless rebuild
+here). Node.js version is pinned to `20.x` in Vercel's project settings to match
+`.nvmrc`, not left at the platform default. See
+[`../docs/DEPLOYMENT.md`](../docs/DEPLOYMENT.md) for the full setup.
+
