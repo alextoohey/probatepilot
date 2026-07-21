@@ -42,33 +42,47 @@ correctly served on the injected port).
      --repository-format=docker --location=us-west1
    gcloud auth configure-docker us-west1-docker.pkg.dev
    ```
-3. Build and push, using the exact same build command already verified working this
-   session (repo root as build context, `agent/Dockerfile` as the Dockerfile path):
+3. Build and push (repo root as build context, `agent/Dockerfile` as the Dockerfile path).
+   **`--platform linux/amd64` is not optional on Apple Silicon** — building without it
+   produces an ARM64 image, which Cloud Run rejects outright at deploy time with
+   `Container manifest type ... must support amd64/linux` (hit this live deploying this
+   exact app; confirmed the fix by rebuilding and redeploying successfully):
    ```bash
-   docker build -f agent/Dockerfile \
+   docker build --platform linux/amd64 -f agent/Dockerfile \
      -t us-west1-docker.pkg.dev/your-project-id/probatepilot/agent:latest .
    docker push us-west1-docker.pkg.dev/your-project-id/probatepilot/agent:latest
    ```
-4. Deploy it:
+4. Deploy it, including the secret env vars. Reading them from your local `agent/.env` via
+   shell substitution (rather than typing literal values into the command) keeps them out
+   of this command's own text, though they still land in `gcloud`'s local command history
+   and Cloud Run's revision config either way:
    ```bash
+   cd agent
+   ANTHROPIC_KEY=$(grep "^ANTHROPIC_API_KEY=" .env | cut -d= -f2-)
+   OPENAI_KEY=$(grep "^OPENAI_API_KEY=" .env | cut -d= -f2-)
+   REDIS_URL_VAL=$(grep "^REDIS_URL=" .env | cut -d= -f2-)
+
    gcloud run deploy probatepilot-agent \
      --image us-west1-docker.pkg.dev/your-project-id/probatepilot/agent:latest \
      --region us-west1 --allow-unauthenticated \
-     --set-env-vars STORE_BACKEND=redis_cloud
+     --set-env-vars "STORE_BACKEND=redis_cloud,ANTHROPIC_API_KEY=${ANTHROPIC_KEY},OPENAI_API_KEY=${OPENAI_KEY},REDIS_URL=${REDIS_URL_VAL}"
    ```
-5. Add the secret env vars through the Cloud Console instead of the CLI (Cloud Run service
-   → **Edit & Deploy New Revision** → **Variables & Secrets**), so they don't land in your
-   shell history: `ANTHROPIC_API_KEY`, `REDIS_URL` (both required), `OPENAI_API_KEY`
-   (optional). For real secret hygiene beyond that, Cloud Run integrates with Secret
-   Manager (`--set-secrets` instead of `--set-env-vars`) — worth doing if you want to go
-   further, not required to get this running.
-6. Once live, note the service URL (`https://probatepilot-agent-xxxx-uw.a.run.app`).
+   Prefer the Cloud Console instead (Cloud Run service → **Edit & Deploy New Revision** →
+   **Variables & Secrets**) if you'd rather not have secrets pass through the CLI at all.
+   For real secret hygiene beyond either of these, Cloud Run integrates with Secret Manager
+   (`--set-secrets` instead of `--set-env-vars`) — worth doing if you want to go further,
+   not required to get this running.
+5. Once live, note the service URL (`https://probatepilot-agent-xxxx-uw.a.run.app`).
    Confirm it's healthy: `curl https://<your-service>.run.app/health`.
 
-**Caveat:** `gcloud` CLI flags and Cloud Run/Artifact Registry free-tier terms shift over
-time, and this wasn't run against a live GCP account to confirm end-to-end — cross-check
-against [Cloud Run's own quickstart](https://cloud.google.com/run/docs/quickstarts) if any
-command above doesn't behave as written.
+**Verified against a live GCP account and a real deployed service** (not just written and
+assumed): project creation, billing linking, API enablement, the Artifact Registry push,
+the `--platform linux/amd64` fix, the deploy itself, and a real request round-tripping
+through Redis Cloud all confirmed working end to end — including a measured 13.99s cold
+start after 12 minutes idle. `gcloud` CLI flags and free-tier terms can still shift over
+time after this was written; cross-check against
+[Cloud Run's own quickstart](https://cloud.google.com/run/docs/quickstarts) if a command
+ever stops behaving as written.
 
 ### Option B: Render (simpler, slower cold starts)
 
@@ -97,6 +111,8 @@ dev or a throwaway demo where that reset is acceptable.
 
 ## 2. Deploy the frontend (Vercel)
 
+**Dashboard path:**
+
 1. In [Vercel](https://vercel.com/new), import the same fork with **Root
    Directory** set to `web/`.
 2. Set the one required env var:
@@ -106,6 +122,22 @@ dev or a throwaway demo where that reset is acceptable.
    `SENTRY_PROJECT`, `NEXT_PUBLIC_APP_URL` (your Vercel URL, used for
    metadata/share links).
 4. Deploy. Vercel auto-detects Next.js — no build config needed.
+
+**CLI path** (what this app's own deploy actually used — verified working):
+
+```bash
+npm install -g vercel
+vercel login   # opens a device-code flow, confirm in browser
+
+cd web
+vercel link --yes --project probatepilot   # one-time; omitting --project auto-names
+                                            # it after the directory ("web"), worth
+                                            # avoiding for a cleaner project name
+vercel env add AGENT_API_URL production      # paste the agent's URL when prompted
+vercel env add DEEPGRAM_API_KEY production   # optional, paste your key when prompted
+
+vercel --prod --yes   # deploy; re-run this after any web/ code change
+```
 
 ## 3. Seed the demo estate
 
