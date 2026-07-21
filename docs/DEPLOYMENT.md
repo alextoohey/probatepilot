@@ -221,6 +221,15 @@ end-to-end for this app, gotchas included.
    probatepilot-agent-deploy --branch=main --region=us-west1`, then confirm with
    `gcloud run revisions list --service=probatepilot-agent --region=us-west1` that a new
    revision landed.
+8. **Scope it to `agent/` changes only** — without this, the trigger fires on *every* push to
+   `main`, including `web/`-only commits, wastefully rebuilding and redeploying an unchanged
+   agent. Set an Included Files filter to `agent/**` and `cloudbuild.yaml` (so changes to the
+   build config itself still trigger a rebuild); leave Ignored Files empty; the CLI
+   equivalent (`gcloud builds triggers update github ... --included-files=...`) hit the same
+   opaque `INVALID_ARGUMENT` as trigger creation for this app, so this one was also done via
+   the Console GUI (trigger → **Edit** → Included files filter, under Advanced). Verify with
+   `gcloud builds triggers describe probatepilot-agent-deploy --region=us-west1
+   --format="yaml(includedFiles,ignoredFiles)"`.
 
 ### Vercel: connect the Git repository
 
